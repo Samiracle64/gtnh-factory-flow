@@ -10,7 +10,7 @@ import {
 } from "./machine-effects";
 
 describe("passive production machine effects", () => {
-  it("applies IC2 crop stat presets as generic config multipliers", () => {
+  it("does not invent IC2 crop multipliers in the client", () => {
     const recipe = enrichPassiveProductionRecipe(testCropRecipe());
     const lowStatsNode: Pick<FactoryNode, "machineConfigTiers" | "coilTier"> = {
       machineConfigTiers: { cropStats: "1-1-1" },
@@ -19,14 +19,11 @@ describe("passive production machine effects", () => {
       machineConfigTiers: { cropStats: "23-31-0" },
     };
 
-    expect(getMachineDurationMultiplier(recipe, lowStatsNode)).toBeCloseTo(3.102);
-    expect(getMachineOutputMultiplier(recipe, lowStatsNode, recipe.outputs[0]!, "LV")).toBeCloseTo(
-      0.866,
-    );
+    expect(recipe.machineConfigControls).toEqual([]);
+    expect(getMachineDurationMultiplier(recipe, lowStatsNode)).toBe(1);
+    expect(getMachineOutputMultiplier(recipe, lowStatsNode, recipe.outputs[0]!, "LV")).toBe(1);
     expect(getMachineDurationMultiplier(recipe, gainNode)).toBe(1);
-    expect(getMachineOutputMultiplier(recipe, gainNode, recipe.outputs[0]!, "LV")).toBeCloseTo(
-      2.741,
-    );
+    expect(getMachineOutputMultiplier(recipe, gainNode, recipe.outputs[0]!, "LV")).toBe(1);
   });
 
   it("applies bee frame output through the Forestry production formula", () => {

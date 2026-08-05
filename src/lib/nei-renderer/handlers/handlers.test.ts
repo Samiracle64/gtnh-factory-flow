@@ -25,9 +25,7 @@ describe("NEI recipe handlers", () => {
       ),
     ).toBe(true);
     expect(
-      result.commands.some(
-        (command) => command.type === "progress" && command.texture === "bath",
-      ),
+      result.commands.some((command) => command.type === "progress" && command.texture === "bath"),
     ).toBe(true);
     expect(result.positionedStacks.map((stack) => [stack.side, stack.kind])).toEqual([
       ["input", "item"],
@@ -100,13 +98,28 @@ describe("NEI recipe handlers", () => {
       recipe({
         kind: "crop_produce",
         machineType: "IC2 Crop",
-        inputs: [{ kind: "item", id: "seed", amount: 1 }],
-        outputs: [{ kind: "item", id: "drop", amount: 2 }],
+        inputs: [{ kind: "item", id: "seed", amount: 1, neiSlot: { x: 12, y: 28 } }],
+        outputs: [{ kind: "item", id: "drop", amount: 2, neiSlot: { x: 172, y: 46 } }],
+        nei: {
+          canvas: { width: 214, height: 92 },
+          slots: [
+            { side: "input", kind: "item", slotIndex: 0, x: 12, y: 28 },
+            { side: "output", kind: "item", slotIndex: 0, x: 172, y: 46 },
+          ],
+          progressBars: [
+            { x: 84, y: 35, width: 24, height: 17, direction: "right", texture: "arrow" },
+          ],
+        },
       }),
     );
 
     expect(result.handlerId).toBe("crop-produce");
+    expect({ width: result.width, height: result.height }).toEqual({ width: 214, height: 92 });
     expect(result.positionedStacks.map((stack) => stack.side)).toEqual(["input", "output"]);
+    expect(result.positionedStacks.map(({ x, y }) => ({ x, y }))).toEqual([
+      { x: 12, y: 28 },
+      { x: 172, y: 46 },
+    ]);
   });
 
   it("renders essentia outputs as aspect stacks and readable text", () => {
@@ -140,8 +153,7 @@ describe("NEI recipe handlers", () => {
     );
 
     const aspectSlots = result.commands.filter(
-      (command): command is NeiSlotCommand =>
-        command.type === "slot" && command.kind === "aspect",
+      (command): command is NeiSlotCommand => command.type === "slot" && command.kind === "aspect",
     );
     expect(aspectSlots).toHaveLength(6);
     expect(aspectSlots.every((command) => command.texturePath === NEI_TEXTURES.aspectSlot)).toBe(
@@ -149,9 +161,7 @@ describe("NEI recipe handlers", () => {
     );
     expect(aspectSlots.every((command) => command.framed !== false)).toBe(true);
     expect(
-      result.commands.some(
-        (command) => command.type === "progress" && command.texture === "arrow",
-      ),
+      result.commands.some((command) => command.type === "progress" && command.texture === "arrow"),
     ).toBe(true);
     expect(result.commands.some((command) => command.type === "rect")).toBe(false);
     expect(result.commands.filter((command) => command.type === "aspect")).toHaveLength(6);
@@ -185,9 +195,9 @@ describe("NEI recipe handlers", () => {
     expect(
       result.commands.some((command) => command.type === "text" && command.text === "Venenum x7"),
     ).toBe(true);
-    expect(result.commands.some((command) => command.type === "text" && command.text === "+3")).toBe(
-      false,
-    );
+    expect(
+      result.commands.some((command) => command.type === "text" && command.text === "+3"),
+    ).toBe(false);
   });
 
   it("limits compact essentia aspects and emits an overflow marker", () => {

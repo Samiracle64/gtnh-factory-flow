@@ -42,17 +42,14 @@ import {
   embedProjectJsonInSvg,
 } from "@/lib/import-export/plan-image";
 import {
-  applyRecipeInputOverrides,
   restoreCrossKindInputOverrideVisuals,
-  applyMachineHandlerToRecipe,
   isRecipeInputConsumed,
   makeResourceKey,
   formatNumberWithThousands,
   resourceMatchesInput,
   trimTrailingDecimalZeros,
 } from "@/lib/model";
-import { applyMachineOutputMultipliers } from "@/lib/solver/machine-effects";
-import { getOverclockedRecipeStats } from "@/lib/solver/overclock";
+import { resolveNodeRecipe } from "@/lib/solver/resolved-recipe";
 import type {
   FactoryEdge,
   FactoryNodeColorTag,
@@ -4081,22 +4078,8 @@ function getResourceForHandle(
 }
 
 function getNodeRecipeForHandles(recipe: Recipe, node: FactoryProject["nodes"][number]): Recipe {
-  const nodeRecipe = applyRecipeInputOverrides(recipe, node);
-  const effectiveRecipe = applyMachineHandlerToRecipe(nodeRecipe, node);
-  const overclockedStats = getOverclockedRecipeStats(nodeRecipe, node);
-  const adjustedRecipe = applyMachineOutputMultipliers(
-    effectiveRecipe,
-    node,
-    overclockedStats.tier,
-  );
-  return restoreCrossKindInputOverrideVisuals(
-    {
-      ...effectiveRecipe,
-      ...adjustedRecipe,
-    },
-    recipe,
-    node,
-  );
+  const resolvedRecipe = resolveNodeRecipe(recipe, node).recipe;
+  return restoreCrossKindInputOverrideVisuals(resolvedRecipe, recipe, node);
 }
 
 function getClientPosition(event: MouseEvent | TouchEvent) {

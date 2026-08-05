@@ -1085,12 +1085,15 @@ function toRecipeSummary(
   return {
     id: enrichedRecipe.id,
     name: enrichedRecipe.name,
+    kind: enrichedRecipe.kind,
+    category: enrichedRecipe.category,
     recipeMap: enrichedRecipe.source?.recipeMap ?? enrichedRecipe.machineType,
     machineType: enrichedRecipe.machineType,
     minimumTier: enrichedRecipe.minimumTier,
     durationTicks: enrichedRecipe.durationTicks,
     eut: enrichedRecipe.eut,
     programmedCircuit: enrichedRecipe.programmedCircuit,
+    specialValue: enrichedRecipe.specialValue,
     machineHandlers: hydrateMachineHandlers(enrichedRecipe.machineHandlers, resourcesByKey),
     machineConfigControls: hydrateMachineConfigControls(
       enrichedRecipe.machineConfigControls,
@@ -1102,6 +1105,7 @@ function toRecipeSummary(
       ? { recipeMap: enrichedRecipe.source.recipeMap }
       : undefined,
     nei: enrichedRecipe.nei,
+    metadata: enrichedRecipe.metadata,
     slots: [],
   };
 }

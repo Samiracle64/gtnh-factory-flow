@@ -24,15 +24,8 @@ import type {
   ThroughputResult,
 } from "../model/types";
 import { TICKS_PER_SECOND } from "../model/types";
-import { applyRecipeInputOverrides } from "../model/recipe-input-overrides";
-import { applyMachineHandlerToRecipe } from "../model/recipe-rules";
-import { getMachineOutputMultiplier, getMachineParallelMultiplier } from "./machine-effects";
-import { getOverclockedRecipeStats } from "./overclock";
-import {
-  getRuntimeCalculationOutputs,
-  runtimeCalculationWarning,
-  selectRuntimeCalculationVariant,
-} from "./runtime-calculation";
+import { resolveNodeRecipe } from "./resolved-recipe";
+import { runtimeCalculationWarning } from "./runtime-calculation";
 
 const EPSILON = 0.000001;
 
@@ -104,20 +97,18 @@ export function calculateThroughput(
       continue;
     }
 
-    const nodeRecipe = applyRecipeInputOverrides(recipe, node);
-    const effectiveRecipe = applyMachineHandlerToRecipe(nodeRecipe, node);
-    const overclockedRecipe = getOverclockedRecipeStats(nodeRecipe, node);
-    const runtimeVariant = selectRuntimeCalculationVariant(effectiveRecipe, node);
-    const runtimeOutputs = getRuntimeCalculationOutputs(effectiveRecipe, node);
-    const machineParallelMultiplier =
-      runtimeVariant?.parallel ?? getMachineParallelMultiplier(effectiveRecipe, node);
+    const resolved = resolveNodeRecipe(recipe, node);
+    const effectiveRecipe = resolved.effectiveRecipe;
+    const resolvedRecipe = resolved.recipe;
+    const overclockedRecipe = resolved.overclockedStats;
+    const machineParallelMultiplier = resolved.machineParallelMultiplier;
     const operationRatePerSecond =
       (node.machineCount * node.parallel * machineParallelMultiplier * TICKS_PER_SECOND) /
       overclockedRecipe.durationTicks;
     const inputs: FlowRecord = {};
     const outputs: FlowRecord = {};
 
-    for (const input of nodeRecipe.inputs) {
+    for (const input of resolvedRecipe.inputs) {
       if (!isRecipeInputConsumed(input)) {
         continue;
       }
@@ -126,14 +117,8 @@ export function calculateThroughput(
       addFlow(inputs, input, amountPerSecond);
     }
 
-    for (const output of runtimeOutputs ?? effectiveRecipe.outputs) {
-      const amountPerSecond =
-        output.amount *
-        getChanceMultiplier(output) *
-        (runtimeOutputs
-          ? 1
-          : getMachineOutputMultiplier(effectiveRecipe, node, output, overclockedRecipe.tier)) *
-        operationRatePerSecond;
+    for (const output of resolvedRecipe.outputs) {
+      const amountPerSecond = output.amount * getChanceMultiplier(output) * operationRatePerSecond;
       addFlow(outputs, output, amountPerSecond);
     }
 
@@ -269,12 +254,7 @@ export function calculateThroughput(
       }
     }
 
-    const nodeRecipe = applyRecipeInputOverrides(recipe, node);
-    const overclockedRecipe = {
-      ...applyMachineHandlerToRecipe(nodeRecipe, node),
-      ...getOverclockedRecipeStats(nodeRecipe, node),
-      outputs: applyOutputMultipliers(nodeRecipe, node),
-    };
+    const overclockedRecipe = resolveNodeRecipe(recipe, node).recipe;
     const utilizationReport = selectLimitingOutput(
       overclockedRecipe,
       node,
@@ -605,7 +585,7 @@ function getEdgeTargetDemandKey(project: FactoryProject, edge: FactoryProject["e
   const targetRecipe = project.recipes.find((recipe) => recipe.id === targetNode?.recipeId);
   const edgeResource = { kind: edge.resourceKind, id: edge.resourceId };
   const effectiveTargetRecipe =
-    targetNode && targetRecipe ? applyRecipeInputOverrides(targetRecipe, targetNode) : undefined;
+    targetNode && targetRecipe ? resolveNodeRecipe(targetRecipe, targetNode).recipe : undefined;
   const input = effectiveTargetRecipe?.inputs.find(
     (entry) => isRecipeInputConsumed(entry) && resourceMatchesInput(edgeResource, entry),
   );
@@ -763,7 +743,7 @@ function canRunForStorageSurplus(
     return false;
   }
 
-  return applyRecipeInputOverrides(recipe, node).inputs.every(
+  return resolveNodeRecipe(recipe, node).recipe.inputs.every(
     (input) => !isRecipeInputConsumed(input),
   );
 }
@@ -970,12 +950,7 @@ function refreshNodeUtilizationFromEdgeResults(
       }
     }
 
-    const nodeRecipe = applyRecipeInputOverrides(recipe, node);
-    const overclockedRecipe = {
-      ...applyMachineHandlerToRecipe(nodeRecipe, node),
-      ...getOverclockedRecipeStats(nodeRecipe, node),
-      outputs: applyOutputMultipliers(nodeRecipe, node),
-    };
+    const overclockedRecipe = resolveNodeRecipe(recipe, node).recipe;
     const utilizationReport = selectLimitingOutput(
       overclockedRecipe,
       node,
@@ -1466,24 +1441,6 @@ function selectLimitingOutput(
   }
 
   return best;
-}
-
-function applyOutputMultipliers(recipe: Recipe, node: FactoryProject["nodes"][number]) {
-  const effectiveRecipe = applyMachineHandlerToRecipe(recipe, node);
-  const runtimeOutputs = getRuntimeCalculationOutputs(effectiveRecipe, node);
-  if (runtimeOutputs) {
-    return runtimeOutputs;
-  }
-  const overclockedRecipe = getOverclockedRecipeStats(recipe, node);
-  return effectiveRecipe.outputs.map((output) => {
-    const multiplier = getMachineOutputMultiplier(
-      effectiveRecipe,
-      node,
-      output,
-      overclockedRecipe.tier,
-    );
-    return multiplier === 1 ? output : { ...output, amount: output.amount * multiplier };
-  });
 }
 
 function getNodeStatus(utilization: number): NodeThroughputResult["status"] {

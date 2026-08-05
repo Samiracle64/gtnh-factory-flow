@@ -1206,7 +1206,7 @@ function VirtualRecipeResultList({
   const anchorRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 360 });
   const rowHeight = recipes.some(usesNativeNeiChrome) ? 322 : 246;
-  const columnCount = 2;
+  const columnCount = 1;
   const overscan = 1;
   const rowCount = Math.ceil(recipes.length / columnCount);
   const startRow = Math.max(0, Math.floor(viewport.scrollTop / rowHeight) - overscan);
@@ -1273,7 +1273,7 @@ function VirtualRecipeResultList({
       }
     >
       <div style={{ height: topPadding }} />
-      <div className="grid grid-cols-2 items-start gap-3">
+      <div className="grid grid-cols-1 items-start gap-3">
         {visibleRecipes.map((recipe) => (
           <RecipeResultCard
             key={recipe.id}
@@ -1345,10 +1345,11 @@ const RecipeResultCard = memo(function RecipeResultCard({
           {onAddConnected ? <GitBranchPlus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
         </button>
       </div>
-      <div className="overflow-hidden pb-1 pr-9">
+      <div className="overflow-x-auto pb-1 pr-9">
         <NeiRecipeWindow
           recipe={previewRecipe}
-          scale={2}
+          scale={1.7}
+          compactSlotPixelSize={32}
           compact
           contextResource={contextResource}
           className="mx-auto"

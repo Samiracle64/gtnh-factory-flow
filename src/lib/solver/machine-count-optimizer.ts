@@ -1,5 +1,3 @@
-import { applyRecipeInputOverrides } from "@/lib/model/recipe-input-overrides";
-import { applyMachineHandlerToRecipe } from "@/lib/model/recipe-rules";
 import {
   getChanceMultiplier,
   getFilledCellFluidEquivalent,
@@ -17,8 +15,7 @@ import type {
   ResourceKey,
 } from "@/lib/model/types";
 import { TICKS_PER_SECOND } from "@/lib/model/types";
-import { getOverclockedRecipeStats } from "./overclock";
-import { getMachineOutputMultiplier, getMachineParallelMultiplier } from "./machine-effects";
+import { resolveNodeRecipe } from "./resolved-recipe";
 
 const EPSILON = 0.000001;
 const STORAGE_BUS_PREFIX = "storage-bus:";
@@ -1381,17 +1378,17 @@ function buildRatePlan(node: FactoryNode, recipe: Recipe | undefined): RatePlan 
     };
   }
 
-  const nodeRecipe = applyRecipeInputOverrides(recipe, node);
-  const effectiveRecipe = applyMachineHandlerToRecipe(nodeRecipe, node);
-  const overclockedRecipe = getOverclockedRecipeStats(nodeRecipe, node);
-  const machineParallelMultiplier = getMachineParallelMultiplier(effectiveRecipe, node);
+  const resolved = resolveNodeRecipe(recipe, node);
+  const effectiveRecipe = resolved.recipe;
+  const overclockedRecipe = resolved.overclockedStats;
+  const machineParallelMultiplier = resolved.machineParallelMultiplier;
   const operationRatePerMachine =
     (node.parallel * machineParallelMultiplier * TICKS_PER_SECOND) /
     overclockedRecipe.durationTicks;
   const inputs = new Map<ResourceKey, number>();
   const outputs = new Map<ResourceKey, number>();
 
-  for (const input of nodeRecipe.inputs) {
+  for (const input of effectiveRecipe.inputs) {
     if (!isRecipeInputConsumed(input)) {
       continue;
     }
@@ -1400,21 +1397,17 @@ function buildRatePlan(node: FactoryNode, recipe: Recipe | undefined): RatePlan 
   }
 
   for (const output of effectiveRecipe.outputs) {
-    const outputRate =
-      output.amount *
-      getChanceMultiplier(output) *
-      getMachineOutputMultiplier(effectiveRecipe, node, output, overclockedRecipe.tier) *
-      operationRatePerMachine;
+    const outputRate = output.amount * getChanceMultiplier(output) * operationRatePerMachine;
     addRate(outputs, makeResourceKey(output.kind, output.id), outputRate);
   }
 
   return {
     node,
-    recipe: nodeRecipe,
+    recipe: effectiveRecipe,
     effectiveRecipe,
     inputs,
     outputs,
-    inputDefinitions: nodeRecipe.inputs.filter(isRecipeInputConsumed),
+    inputDefinitions: effectiveRecipe.inputs.filter(isRecipeInputConsumed),
     enabled: true,
     valid: true,
   };

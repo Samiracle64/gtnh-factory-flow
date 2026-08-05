@@ -11,19 +11,14 @@ import type {
   ResourceAmount,
 } from "@/lib/model/types";
 import { getOverclockedRecipeStats } from "@/lib/solver/overclock";
-import {
-  applyMachineOutputMultipliers,
-  getMachineParallelMultiplier,
-} from "@/lib/solver/machine-effects";
+import { resolveNodeRecipe } from "@/lib/solver/resolved-recipe";
 import {
   formatRate,
-  applyMachineHandlerToRecipe,
   GT_OVERCLOCK_TIERS,
   getHighestFiniteVoltageTier,
   getRecipeMachineHandlers,
   getRecipeMachineConfigTierControls,
   getRecipeCoilTierControl,
-  applyRecipeInputOverrides,
   restoreCrossKindInputOverrideVisuals,
   getRecipePowerTier,
   getSelectedMachineHandler,
@@ -93,8 +88,8 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   const nodeColor = projectNode.colorTag ? GT_NODE_COLORS[projectNode.colorTag] : undefined;
   const machineHandlers = getRecipeMachineHandlers(recipe);
   const selectedMachineHandler = getSelectedMachineHandler(recipe, projectNode);
-  const nodeRecipe = applyRecipeInputOverrides(recipe, projectNode);
-  const effectiveRecipe = applyMachineHandlerToRecipe(nodeRecipe, projectNode);
+  const resolvedNodeRecipe = resolveNodeRecipe(recipe, projectNode);
+  const effectiveRecipe = resolvedNodeRecipe.effectiveRecipe;
   const recipePowerTier = getRecipePowerTier(effectiveRecipe);
   const tierControl = getNodeTierControl(effectiveRecipe, projectNode);
   const coilControl = getRecipeCoilTierControl(effectiveRecipe, projectNode);
@@ -128,9 +123,11 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
       !isCropProductionConfigControl(control.id) &&
       !isBeeProductionConfigControl(control.id),
   );
-  const machineParallelMultiplier = getMachineParallelMultiplier(effectiveRecipe, projectNode);
-  const overclockedStats = getOverclockedRecipeStats(nodeRecipe, projectNode);
-  const toolAdjustedRecipe = applyTreeGrowthSimulatorToolInputs(effectiveRecipe, tgsToolControls);
+  const machineParallelMultiplier = resolvedNodeRecipe.machineParallelMultiplier;
+  const toolAdjustedRecipe = applyTreeGrowthSimulatorToolInputs(
+    resolvedNodeRecipe.recipe,
+    tgsToolControls,
+  );
   const visualToolAdjustedRecipe = restoreCrossKindInputOverrideVisuals(
     toolAdjustedRecipe,
     recipe,
@@ -139,16 +136,7 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
   const displayRecipe = isBeeProductionNode
     ? stripBeeFrameSlotInputs(visualToolAdjustedRecipe)
     : visualToolAdjustedRecipe;
-  const adjustedRecipe = applyMachineOutputMultipliers(
-    displayRecipe,
-    projectNode,
-    overclockedStats.tier,
-  );
-  const overclockedRecipe = {
-    ...displayRecipe,
-    ...adjustedRecipe,
-    ...overclockedStats,
-  };
+  const overclockedRecipe = displayRecipe;
   const tierColor = tierControl ? GT_TIER_COLORS[tierControl.current] : undefined;
   const usesNativeNeiRecipe = usesNativeNeiChrome(overclockedRecipe);
   const exceedsMaxTier =

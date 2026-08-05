@@ -176,7 +176,7 @@ describe("enrichDatasetRecipes", () => {
     expect(enriched.recipes[0]?.inputs).toHaveLength(1);
   });
 
-  it("adds first-pass IC2 crop production controls without manual harvest", () => {
+  it("derives IC2 crop controls exclusively from oracle runtime variants", () => {
     const dataset = baseDataset([
       {
         id: "ic2-crop-stickle",
@@ -197,6 +197,54 @@ describe("enrichDatasetRecipes", () => {
         ],
         outputs: [{ kind: "item", id: "IC2:itemHarz", amount: 1, displayName: "Sticky Resin" }],
         source: { recipeMap: "IC2 Crop" },
+        machineConfigControls: [
+          {
+            id: "cropHydration",
+            label: "Hydration",
+            minimumKey: "normal",
+            defaultKey: "normal",
+            tiers: [
+              {
+                key: "normal",
+                label: "Normal",
+                durationMultiplier: 0.92,
+                resource: { kind: "item", id: "legacy:hydration", amount: 1 },
+              },
+            ],
+          },
+        ],
+        runtimeCalculation: {
+          sourceKind: "passive-crop",
+          status: "computed",
+          oracleEligible: true,
+          strict: true,
+          variants: [
+            {
+              id: "1-1-1",
+              label: "1/1/1",
+              machineConfigTiers: { cropStats: "1-1-1" },
+              durationTicks: 8704,
+              eut: 0,
+              outputs: [{ kind: "item", id: "IC2:itemHarz", amount: 0.865619 }],
+            },
+            {
+              id: "23-31-0",
+              label: "23/31/0",
+              machineConfigTiers: { cropStats: "23-31-0" },
+              durationTicks: 8704,
+              eut: 0,
+              outputs: [{ kind: "item", id: "IC2:itemHarz", amount: 2.740621 }],
+            },
+            {
+              id: "31-31-31",
+              label: "31/31/31",
+              machineConfigTiers: { cropStats: "31-31-31" },
+              durationTicks: 17408,
+              eut: 0,
+              outputs: [{ kind: "item", id: "IC2:itemHarz", amount: 2.740621 }],
+            },
+          ],
+        },
       },
     ]);
 
@@ -213,7 +261,9 @@ describe("enrichDatasetRecipes", () => {
     expect(recipe?.machineHandlers).toEqual([]);
     expect(recipe?.inputs[0]?.tooltip).toEqual(["Not a generated line"]);
     expect(statControl?.defaultKey).toBe("23-31-0");
-    expect(statControl?.tiers.map((tier) => tier.label)).toEqual(["1/1/1", "23/31/0"]);
+    expect(statControl?.tiers.map((tier) => tier.label)).toEqual(["1/1/1", "23/31/0", "31/31/31"]);
+    expect(statControl?.tiers.every((tier) => tier.outputMultiplier === undefined)).toBe(true);
+    expect(recipe?.machineConfigControls?.map((control) => control.id)).toEqual(["cropStats"]);
   });
 
   it("adds bee production handlers and machine-specific controls", () => {

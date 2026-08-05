@@ -127,6 +127,7 @@ const recipes = [];
 const recipeMaps = new Set();
 const recipeMapIcons = new Map();
 const recipeSignatures = new Set();
+const normalizationFailures = [];
 const oreDictionaryAlternativesByName = new Map();
 const oreDictionary = normalizeOreDictionary(findDomain("oreDictionary")?.entries ?? {});
 
@@ -174,20 +175,42 @@ function normalizeGregtech(domain) {
     setRecipeMapIcon(machineType, recipeMap.icon);
     const catalystControls = machineConfigControlsFromCatalysts(recipeMap.catalysts);
     for (const rawRecipe of recipeMap.recipes ?? []) {
+      const exportedNei = normalizeGregtechNeiLayout(rawRecipe.neiLayout);
+      let itemInputIndex = 0;
+      let fluidInputIndex = 0;
+      let itemOutputIndex = 0;
+      let fluidOutputIndex = 0;
       const inputs = [
         ...(rawRecipe.itemInputs ?? []).map((entry) =>
-          resourceAmount(entry, { consumed: entry.consumed === false ? false : undefined }),
+          resourceAmount(entry, {
+            consumed: entry.consumed === false ? false : undefined,
+            neiSlot: exportedNeiSlot(exportedNei, "input", "item", itemInputIndex++),
+          }),
         ),
         ...(rawRecipe.nonConsumedInputs ?? []).map((entry) =>
-          resourceAmount(entry, { consumed: false }),
+          resourceAmount(entry, {
+            consumed: false,
+            neiSlot: exportedNeiSlot(exportedNei, "input", "item", itemInputIndex++),
+          }),
         ),
-        ...(rawRecipe.fluidInputs ?? []).map((entry) => resourceAmount(entry)),
+        ...(rawRecipe.fluidInputs ?? []).map((entry) =>
+          resourceAmount(entry, {
+            neiSlot: exportedNeiSlot(exportedNei, "input", "fluid", fluidInputIndex++),
+          }),
+        ),
       ].filter(Boolean);
       const outputs = [
         ...(rawRecipe.itemOutputs ?? []).map((entry) =>
-          resourceAmount(entry, { chance: entry.chance }),
+          resourceAmount(entry, {
+            chance: entry.chance,
+            neiSlot: exportedNeiSlot(exportedNei, "output", "item", itemOutputIndex++),
+          }),
         ),
-        ...(rawRecipe.fluidOutputs ?? []).map((entry) => resourceAmount(entry)),
+        ...(rawRecipe.fluidOutputs ?? []).map((entry) =>
+          resourceAmount(entry, {
+            neiSlot: exportedNeiSlot(exportedNei, "output", "fluid", fluidOutputIndex++),
+          }),
+        ),
       ].filter(Boolean);
 
       if (outputs.length === 0) {
@@ -226,6 +249,7 @@ function normalizeGregtech(domain) {
           rawRecipeId: `${recipeMap.id}:${rawRecipe.id}`,
         },
         nei: {
+          ...(exportedNei ?? {}),
           additionalInfo: [`Special value: ${rawRecipe.specialValue ?? 0}`],
         },
         metadata: {
@@ -235,6 +259,83 @@ function normalizeGregtech(domain) {
       });
     }
   }
+}
+
+function normalizeGregtechNeiLayout(rawLayout) {
+  if (!rawLayout || typeof rawLayout !== "object") {
+    return undefined;
+  }
+  const slots = (rawLayout.slots ?? [])
+    .map((slot) => {
+      const side = slot.side === "input" || slot.side === "output" ? slot.side : undefined;
+      const kind = ["item", "fluid", "aspect"].includes(slot.kind) ? slot.kind : undefined;
+      const slotIndex = Number(slot.slotIndex);
+      const x = Number(slot.x);
+      const y = Number(slot.y);
+      if (
+        !side ||
+        !kind ||
+        !Number.isInteger(slotIndex) ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y)
+      ) {
+        return undefined;
+      }
+      return { side, kind, slotIndex, x: Math.round(x), y: Math.round(y) };
+    })
+    .filter(Boolean);
+  const progressBars = (rawLayout.progressBars ?? [])
+    .map((bar) => {
+      const x = Number(bar.x);
+      const y = Number(bar.y);
+      const width = Number(bar.width);
+      const height = Number(bar.height);
+      const rawDirection = String(bar.direction ?? "right").toLowerCase();
+      const direction = rawDirection.includes("up")
+        ? "up"
+        : rawDirection.includes("circular")
+          ? "circular"
+          : "right";
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+        return undefined;
+      }
+      return {
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.round(width),
+        height: Math.round(height),
+        direction,
+        texture: text(bar.texture, "arrow"),
+      };
+    })
+    .filter(Boolean);
+  const width = Number(rawLayout.canvas?.width);
+  const height = Number(rawLayout.canvas?.height);
+  const slotCapacity = Object.fromEntries(
+    ["maxItemInputs", "maxItemOutputs", "maxFluidInputs", "maxFluidOutputs"].flatMap((key) => {
+      const value = Number(rawLayout.slotCapacity?.[key]);
+      return Number.isInteger(value) && value >= 0 ? [[key, value]] : [];
+    }),
+  );
+  return removeUndefined({
+    source: text(rawLayout.source, "gregtech-recipe-map-frontend"),
+    handlerClass: text(rawLayout.handlerClass, undefined),
+    canvas:
+      Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+        ? { width: Math.round(width), height: Math.round(height) }
+        : undefined,
+    slotCapacity: Object.keys(slotCapacity).length > 0 ? slotCapacity : undefined,
+    slots,
+    progressBars,
+  });
+}
+
+function exportedNeiSlot(nei, side, kind, slotIndex) {
+  const slot = nei?.slots?.find(
+    (candidate) =>
+      candidate.side === side && candidate.kind === kind && candidate.slotIndex === slotIndex,
+  );
+  return slot ? { x: slot.x, y: slot.y } : undefined;
 }
 
 function normalizeCrafting(domain) {
@@ -722,10 +823,24 @@ function normalizeIc2Crops(domain) {
       crop;
     const outputs = cropOutputs(baseVariant.drops ?? crop.drops);
     if (outputs.length === 0) {
+      normalizationFailures.push({
+        adapter: "ic2-crops",
+        id: `${crop.owner ?? "unknown"}:${crop.id ?? crop.name ?? "unknown"}`,
+        reason: "Crop has no exported drop for its base runtime variant.",
+      });
       continue;
     }
     const input = cropSeedInput(crop);
+    if (!input) {
+      normalizationFailures.push({
+        adapter: "ic2-crops",
+        id: `${crop.owner ?? "unknown"}:${crop.id ?? crop.name ?? "unknown"}`,
+        reason: "Crop has no real seed ItemStack; synthetic seed resources are not allowed.",
+      });
+      continue;
+    }
     const durationTicks = positiveInt(baseVariant.durationTicks ?? crop.durationTicks, 200);
+    const cropName = cropDisplayName(crop, input);
 
     recipeMaps.add(machineType);
     setRecipeMapIcon(
@@ -734,14 +849,14 @@ function normalizeIc2Crops(domain) {
     );
     addRecipe({
       id: recipeId("ic2-crop", crop.owner, crop.id ?? crop.name ?? hashRecipe(crop)),
-      name: `${machineType}: ${text(crop.name, crop.id ?? "Crop")}`,
+      name: `${machineType}: ${cropName}`,
       kind: "crop_produce",
       category: "ic2-crop",
       machineType,
       minimumTier: "NONE",
       durationTicks,
       eut: 0,
-      inputs: input ? [input] : [],
+      inputs: [input],
       outputs,
       runtimeCalculation: {
         sourceKind: "passive-crop",
@@ -753,7 +868,7 @@ function normalizeIc2Crops(domain) {
         generatedAt,
         variants: cropRuntimeVariants(crop, outputs, durationTicks),
         warnings: [
-          "Crop drops are calculated by live IC2/CropsNH crop-card methods with a simulated server crop tile. Environment-specific support blocks are represented by separate controls when the crop exposes enough data.",
+          "Crop drops and durations are calculated by live IC2/CropsNH crop-card methods. Only the exported stat presets are selectable; no client-side crop formula is applied.",
         ],
       },
       notes: [
@@ -810,21 +925,55 @@ function beeSpeciesInput(species) {
 }
 
 function cropSeedInput(crop) {
-  const icon = resourceAmount(crop.seed ?? crop.displayItem, { consumed: false, defaultAmount: 1 });
+  const seed = resourceAmount(crop.seed, {
+    consumed: false,
+    defaultAmount: 1,
+    neiSlot: { x: 34, y: 35 },
+  });
+  if (!seed) {
+    return undefined;
+  }
   const owner = text(crop.owner, "unknown");
   const name = text(crop.name, crop.id ?? hashRecipe(crop));
+  const displayName = looksLikeTranslationKey(seed.displayName)
+    ? `${humanizeCropIdentifier(crop.id ?? crop.name)} Seeds`
+    : seed.displayName;
   return removeUndefined({
-    kind: "item",
-    id: `factoryflow:ic2_crop_seed:${slug(owner)}-${slug(crop.id ?? name)}`,
+    ...seed,
     amount: 1,
-    displayName: `${name} Seed`,
-    iconPath: icon?.iconPath,
-    dominantColor: icon?.dominantColor,
-    modId: icon?.modId ?? "IC2",
-    tooltip: ["IC2 crop seed", `Owner: ${owner}`, `Crop: ${name}`, crop.className].filter(Boolean),
+    displayName,
+    tooltip: [
+      ...(seed.tooltip ?? []),
+      "IC2 crop seed",
+      `Owner: ${owner}`,
+      `Crop: ${name}`,
+      crop.className,
+    ].filter(Boolean),
     consumed: false,
     neiSlot: { x: 34, y: 35 },
   });
+}
+
+function cropDisplayName(crop, seed) {
+  const rawName = text(crop.name, crop.id ?? "Crop");
+  if (!looksLikeTranslationKey(rawName)) {
+    return rawName;
+  }
+  const seedName = text(seed.displayName, rawName).replace(/\s+seeds?$/i, "");
+  return looksLikeTranslationKey(seedName) ? humanizeCropIdentifier(crop.id ?? rawName) : seedName;
+}
+
+function looksLikeTranslationKey(value) {
+  const label = text(value, "");
+  return /^[a-z0-9_.:-]+(?:\s+seeds?)?$/i.test(label) && /[.:_]/.test(label);
+}
+
+function humanizeCropIdentifier(value) {
+  const segment = text(value, "Crop").split(/[.:/]/).filter(Boolean).at(-1) ?? "Crop";
+  return segment
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function cropOutputs(rawDrops) {
@@ -1220,11 +1369,14 @@ function resourceAmount(rawResource, options = {}) {
   }
 
   const amount = positiveNumber(rawResource.amount, options.defaultAmount ?? 1);
-  const id = canonicalResourceId(rawResource.kind, text(rawResource.id, ""));
-  if (!id || !(amount > 0)) {
+  const canonicalId = canonicalResourceId(rawResource.kind, text(rawResource.id, ""));
+  if (!canonicalId || !(amount > 0)) {
     return undefined;
   }
-
+  const id =
+    rawResource.kind === "item" && rawResource.nbt
+      ? `${canonicalId}#nbt-${hashRecipe(String(rawResource.nbt))}`
+      : canonicalId;
   const iconPath = renderedIconPath(rawResource.icon) ?? text(rawResource.iconPath, undefined);
   const tooltip = [
     ...(normalizeStringArray(rawResource.tooltip) ?? []),
@@ -1721,7 +1873,7 @@ async function writeOracleReport(dataset) {
       recipe.runtimeCalculation?.status === "computed" &&
       recipe.runtimeCalculation?.variants?.length > 0,
   );
-  const failures = runtimeRecipes
+  const runtimeFailures = runtimeRecipes
     .filter((recipe) => !computedRuntimeRecipes.includes(recipe))
     .map((recipe) => ({
       id: recipe.id,
@@ -1737,6 +1889,7 @@ async function writeOracleReport(dataset) {
       detected: adapter.detected,
       warnings: adapter.warnings,
     }));
+  const failures = [...runtimeFailures, ...normalizationFailures];
   const report = {
     schemaVersion: 1,
     datasetVersionId,
@@ -1747,11 +1900,12 @@ async function writeOracleReport(dataset) {
     recipeCount: dataset.recipes.length,
     runtimeEligibleRecipeCount: runtimeRecipes.length,
     runtimeComputedRecipeCount: computedRuntimeRecipes.length,
-    runtimeMissingRecipeCount: failures.length,
+    runtimeMissingRecipeCount: runtimeFailures.length,
+    normalizationFailureCount: normalizationFailures.length,
     failures,
     adapterWarnings,
     notes:
-      "Strict mode fails only for recipes that are exported as oracle-eligible but lack computed runtime variants. Adapter warnings are preserved for coverage tracking.",
+      "Strict mode fails for oracle-eligible recipes without computed runtime variants and for records that cannot be normalized without inventing resources. Adapter warnings are preserved for coverage tracking.",
   };
   await fs.mkdir(path.join(outDir, "oracle"), { recursive: true });
   await fs.writeFile(
@@ -1760,7 +1914,7 @@ async function writeOracleReport(dataset) {
   );
   if (oracleStrict && failures.length > 0) {
     throw new Error(
-      `Oracle strict mode failed: ${failures.length} oracle-eligible recipe(s) have no computed runtime calculation. See oracle/oracle-report.json.`,
+      `Oracle strict mode failed: ${failures.length} runtime or normalization failure(s). See oracle/oracle-report.json.`,
     );
   }
 }

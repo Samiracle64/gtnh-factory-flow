@@ -7,11 +7,6 @@ import type {
 } from "./types";
 
 export const CROP_STATS_CONTROL_ID = "cropStats";
-export const CROP_HYDRATION_CONTROL_ID = "cropHydration";
-export const CROP_NUTRIENTS_CONTROL_ID = "cropNutrients";
-export const CROP_SOIL_CONTROL_ID = "cropSoil";
-export const CROP_SOIL_DEPTH_CONTROL_ID = "cropSoilDepth";
-export const CROP_AIR_QUALITY_CONTROL_ID = "cropAirQuality";
 
 export const BEE_FRAME_SLOT_CONTROL_PREFIX = "beeFrameSlot";
 export const BEE_ENVIRONMENT_CONTROL_ID = "beeEnvironment";
@@ -32,13 +27,13 @@ const INDUSTRIAL_APIARY_BASE_EUT = 37;
 const INDUSTRIAL_APIARY_ACCELERATION_AMP_EUT = [32, 128, 512, 2048, 8192, 32768, 131072, 524288];
 const INDUSTRIAL_APIARY_PRODUCTION_EUT_MULTIPLIER = 1.4;
 
-const CROP_CONTROL_IDS = new Set([
-  CROP_STATS_CONTROL_ID,
-  CROP_HYDRATION_CONTROL_ID,
-  CROP_NUTRIENTS_CONTROL_ID,
-  CROP_SOIL_CONTROL_ID,
-  CROP_SOIL_DEPTH_CONTROL_ID,
-  CROP_AIR_QUALITY_CONTROL_ID,
+const CROP_CONTROL_IDS = new Set([CROP_STATS_CONTROL_ID]);
+const LEGACY_CROP_CONTROL_IDS = new Set([
+  "cropHydration",
+  "cropNutrients",
+  "cropSoil",
+  "cropSoilDepth",
+  "cropAirQuality",
 ]);
 
 const BEE_CONTROL_IDS = new Set([
@@ -58,32 +53,10 @@ export interface CropStatsPreset {
   resistance: number;
 }
 
-interface Ic2CropSimulationProfile {
-  tier: number;
-  environmentScore: number;
-  baselineStats: CropStatsPreset;
-}
-
 type PassiveProductionRecipeLabel = Pick<Recipe, "machineType" | "source"> & {
   name?: string;
   recipeMap?: string;
 };
-
-const IC2_STICKREED_PROFILE: Ic2CropSimulationProfile = {
-  tier: 4,
-  environmentScore: 120,
-  baselineStats: { growth: 23, gain: 31, resistance: 0 },
-};
-
-const CROPNH_GENERIC_PROFILE: Ic2CropSimulationProfile = {
-  tier: 1,
-  environmentScore: 120,
-  baselineStats: { growth: 31, gain: 31, resistance: 31 },
-};
-
-const SQRT_2_PI = Math.sqrt(2 * Math.PI);
-const ic2DropMultiplierCache = new Map<string, number>();
-const ic2GrowthCycleCache = new Map<string, number>();
 
 export function enrichPassiveProductionRecipe(recipe: Recipe): Recipe {
   if (isCropProductionRecipe(recipe)) {
@@ -106,15 +79,6 @@ export function isCropProductionRecipe(recipe: PassiveProductionRecipeLabel) {
   return (
     /\bic2 crops?\b/.test(label) || /\bcropnh\b/.test(label) || /\bcrop production\b/.test(label)
   );
-}
-
-export function isIc2LegacyCropRecipe(recipe: PassiveProductionRecipeLabel) {
-  const label = passiveProductionLabel(recipe);
-  return /\bic2 crops?\b/.test(label) && !/\bcropnh\b/.test(label);
-}
-
-export function isCropNhRecipe(recipe: PassiveProductionRecipeLabel) {
-  return /\bcropnh\b/.test(passiveProductionLabel(recipe));
 }
 
 export function isBeeProductionRecipe(recipe: PassiveProductionRecipeLabel) {
@@ -225,7 +189,11 @@ export function getCropStatsPreset(value: string | undefined): CropStatsPreset |
 
 function enrichCropProductionRecipe(recipe: Recipe): Recipe {
   const controls = cropProductionControls(recipe);
-  const machineConfigControls = mergeMachineConfigControls(recipe.machineConfigControls, controls);
+  const existingNonCropControls = recipe.machineConfigControls?.filter(
+    (control) =>
+      !isCropProductionConfigControl(control.id) && !LEGACY_CROP_CONTROL_IDS.has(control.id),
+  );
+  const machineConfigControls = mergeMachineConfigControls(existingNonCropControls, controls);
   const baseMachine = "Crop Manager";
 
   return {
@@ -239,8 +207,8 @@ function enrichCropProductionRecipe(recipe: Recipe): Recipe {
     notes: withPassiveProductionNote(
       recipe.notes,
       recipe.runtimeCalculation?.status === "computed"
-        ? "Crop production uses GTNH runtime baseline data when a matching oracle variant exists; unmatched controls fall back to passive averages."
-        : "Crop production controls are best-effort passive averages. Seed count multiplies output without adding power draw.",
+        ? "Crop production uses only the exact stat presets exported by the GTNH runtime oracle."
+        : "Crop production has no selectable estimates because the GTNH runtime oracle did not export a computed variant.",
     ),
   };
 }
@@ -265,108 +233,50 @@ function enrichBeeProductionRecipe(recipe: Recipe): Recipe {
   };
 }
 
-function cropProductionControls(recipe: PassiveProductionRecipeLabel) {
+function cropProductionControls(recipe: Recipe): MachineConfigControl[] {
+  if (recipe.runtimeCalculation?.status !== "computed") {
+    return [];
+  }
+
+  const variants = recipe.runtimeCalculation.variants.filter(
+    (variant) => variant.machineConfigTiers?.[CROP_STATS_CONTROL_ID],
+  );
+  const seen = new Set<string>();
+  const tiers = variants.flatMap((variant) => {
+    const key = variant.machineConfigTiers?.[CROP_STATS_CONTROL_ID];
+    if (!key || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    const stats = getCropStatsPreset(key);
+    const label =
+      variant.label ?? (stats ? `${stats.growth}/${stats.gain}/${stats.resistance}` : key);
+    return [
+      {
+        key,
+        label,
+        resource: configResource(`crop_stats_${key.replaceAll("-", "_")}`, label, [
+          "GTNH oracle crop-stat preset",
+          ...(stats
+            ? [`Growth: ${stats.growth}`, `Gain: ${stats.gain}`, `Resistance: ${stats.resistance}`]
+            : []),
+        ]),
+      },
+    ];
+  });
+  if (tiers.length === 0) {
+    return [];
+  }
+
   return [
-    cropStatsControl(recipe),
-    selectControl({
-      id: CROP_HYDRATION_CONTROL_ID,
-      label: "Hydration",
-      defaultKey: "normal",
-      tiers: [
-        option("dry", "Dry", "crop_hydration_dry", "Dry", { durationMultiplier: 1.25 }),
-        option("normal", "Normal", "crop_hydration_normal", "Normal"),
-        option("hydrated", "Hydrated", "crop_hydration_hydrated", "Hydrated", {
-          durationMultiplier: 0.92,
-        }),
-        option("constant", "Constant Water", "crop_hydration_constant", "Constant Water", {
-          durationMultiplier: 0.85,
-        }),
-      ],
-    }),
-    selectControl({
-      id: CROP_NUTRIENTS_CONTROL_ID,
-      label: "Nutrients",
-      defaultKey: "none",
-      tiers: [
-        option("none", "None", "crop_nutrients_none", "No Fertilizer"),
-        option("fertilized", "Fertilized", "crop_nutrients_fertilized", "Fertilized", {
-          durationMultiplier: 0.9,
-        }),
-        option(
-          "constant",
-          "Constant Fertilizer",
-          "crop_nutrients_constant",
-          "Constant Fertilizer",
-          {
-            durationMultiplier: 0.82,
-          },
-        ),
-      ],
-    }),
-    selectControl({
-      id: CROP_SOIL_CONTROL_ID,
-      label: "Soil",
-      defaultKey: "farmland",
-      tiers: [
-        option("dirt", "Dirt", "minecraft:dirt", "Dirt", { durationMultiplier: 1.15 }),
-        option("farmland", "Farmland", "minecraft:farmland", "Farmland"),
-        option(
-          "hydrated-farmland",
-          "Hydrated Farmland",
-          "minecraft:farmland@7",
-          "Hydrated Farmland",
-          {
-            durationMultiplier: 0.95,
-          },
-        ),
-      ],
-    }),
-    selectControl({
-      id: CROP_SOIL_DEPTH_CONTROL_ID,
-      label: "Soil Depth",
-      defaultKey: "1",
-      tiers: [
-        option("0", "0", "crop_depth_0", "Depth 0", { durationMultiplier: 1.12 }),
-        option("1", "1", "crop_depth_1", "Depth 1"),
-        option("2", "2", "crop_depth_2", "Depth 2", { durationMultiplier: 0.96 }),
-        option("3-plus", "3+", "crop_depth_3_plus", "Depth 3+", { durationMultiplier: 0.92 }),
-      ],
-    }),
-    selectControl({
-      id: CROP_AIR_QUALITY_CONTROL_ID,
-      label: "Air Quality",
-      defaultKey: "normal",
-      tiers: [
-        option("poor", "Poor", "crop_air_poor", "Poor Air", { durationMultiplier: 1.2 }),
-        option("normal", "Normal", "crop_air_normal", "Normal Air"),
-        option("good", "Good", "crop_air_good", "Good Air", { durationMultiplier: 0.96 }),
-        option("optimal", "Optimal", "crop_air_optimal", "Optimal Air", {
-          durationMultiplier: 0.9,
-        }),
-      ],
-    }),
+    {
+      id: CROP_STATS_CONTROL_ID,
+      label: "Crop Stats",
+      minimumKey: tiers[0]?.key ?? "1-1-1",
+      defaultKey: tiers.some((tier) => tier.key === "23-31-0") ? "23-31-0" : tiers[0]?.key,
+      tiers,
+    },
   ];
-}
-
-function cropStatsControl(recipe: PassiveProductionRecipeLabel): MachineConfigControl {
-  const tiers = isCropNhRecipe(recipe)
-    ? [
-        cropStatsOption({ growth: 1, gain: 1, resistance: 1 }, CROPNH_GENERIC_PROFILE),
-        cropStatsOption({ growth: 23, gain: 31, resistance: 0 }, CROPNH_GENERIC_PROFILE),
-        cropStatsOption({ growth: 31, gain: 31, resistance: 31 }, CROPNH_GENERIC_PROFILE),
-      ]
-    : [
-        cropStatsOption({ growth: 1, gain: 1, resistance: 1 }, IC2_STICKREED_PROFILE),
-        cropStatsOption({ growth: 23, gain: 31, resistance: 0 }, IC2_STICKREED_PROFILE),
-      ];
-
-  return {
-    id: CROP_STATS_CONTROL_ID,
-    label: "Crop Stats",
-    minimumKey: tiers[0]?.key ?? "1-1-1",
-    defaultKey: isCropNhRecipe(recipe) ? "31-31-31" : "23-31-0",
-    tiers,
-  };
 }
 
 function apiaryProductionControls(): MachineConfigControl[] {
@@ -400,7 +310,8 @@ function sanitizeBeeProductionInputs(inputs: Recipe["inputs"]): Recipe["inputs"]
 
 function isIc2CropSeedInput(input: ResourceAmount) {
   return (
-    /^IC2:itemCropSeed(?:@|$)/i.test(input.id) || input.id.startsWith("factoryflow:ic2_crop_seed:")
+    /^IC2:itemCropSeed(?:@|#|$)/i.test(input.id) ||
+    input.id.startsWith("factoryflow:ic2_crop_seed:")
   );
 }
 
@@ -689,238 +600,6 @@ function getIndustrialApiaryProductionUpgradeModifier(key: string) {
   }
   const clampedCount = Math.max(0, Math.min(8, count));
   return 4 * 1.2 ** clampedCount + 8 - BEE_INDUSTRIAL_APIARY_BASE_PRODUCTION_TERM;
-}
-
-function cropStatsOption(
-  stats: CropStatsPreset,
-  profile: Ic2CropSimulationProfile,
-): MachineConfigTierOption {
-  const label = `${stats.growth}/${stats.gain}/${stats.resistance}`;
-  const effect = ic2CropStatsEffect(stats, profile);
-  return {
-    key: `${stats.growth}-${stats.gain}-${stats.resistance}`,
-    label,
-    ...effect,
-    resource: configResource(
-      `crop_stats_${stats.growth}_${stats.gain}_${stats.resistance}`,
-      label,
-      [
-        "Crop stat preset",
-        `Growth: ${stats.growth}`,
-        `Gain: ${stats.gain}`,
-        `Resistance: ${stats.resistance}`,
-      ],
-    ),
-  };
-}
-
-function ic2CropStatsEffect(
-  stats: CropStatsPreset,
-  profile: Ic2CropSimulationProfile,
-): Pick<MachineConfigTierOption, "durationMultiplier" | "outputMultiplier"> {
-  // Mirrors GTNH EIG's IC2 crop approximation: gain changes drop rounds, growth changes tick cycles.
-  const baselineCycles = ic2AverageGrowthCycles(profile.baselineStats, profile);
-  const cycles = ic2AverageGrowthCycles(stats, profile);
-  const durationMultiplier = cycles > 0 && baselineCycles > 0 ? cycles / baselineCycles : 1;
-
-  return {
-    durationMultiplier: roundMultiplier(durationMultiplier),
-    outputMultiplier: roundMultiplier(ic2ExpectedHarvestOutput(stats.gain, profile.tier)),
-  };
-}
-
-function ic2ExpectedHarvestOutput(gain: number, tier: number) {
-  const cacheKey = `${tier}:${gain}`;
-  const cached = ic2DropMultiplierCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  const baseDropGainChance = 0.95 ** tier;
-  const dropRounds = ic2AverageDropRounds(baseDropGainChance * 1.03 ** gain);
-  const stackIncrease = (gain + 1) / 100;
-  const multiplier = dropRounds * (1 + stackIncrease);
-  ic2DropMultiplierCache.set(cacheKey, multiplier);
-  return multiplier;
-}
-
-function ic2AverageDropRounds(chance: number) {
-  const min = -10;
-  const max = 10;
-  const steps = 10_000;
-  const stepSize = (max - min) / steps;
-  let sum = 0;
-
-  for (let step = 1; step <= steps - 1; step += 1) {
-    sum += weightedDropChance(min + step * stepSize, chance);
-  }
-
-  return stepSize * ((weightedDropChance(min, chance) + weightedDropChance(max, chance)) / 2 + sum);
-}
-
-function weightedDropChance(x: number, chance: number) {
-  return Math.max(0, Math.round(x * chance * 0.6827 + chance)) * standardNormalDistribution(x);
-}
-
-function standardNormalDistribution(x: number) {
-  return Math.exp(-0.5 * x * x) / SQRT_2_PI;
-}
-
-function ic2AverageGrowthCycles(stats: CropStatsPreset, profile: Ic2CropSimulationProfile) {
-  const cacheKey = `${profile.tier}:${profile.environmentScore}:${stats.growth}:${stats.gain}:${stats.resistance}`;
-  const cached = ic2GrowthCycleCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  const growthSpeeds = Array.from({ length: 7 }, (_unused, roll) =>
-    ic2AverageGrowthRate(stats, profile, roll),
-  );
-  if (growthSpeeds.some((speed) => speed < 0)) {
-    ic2GrowthCycleCache.set(cacheKey, -1);
-    return -1;
-  }
-
-  const nonZeroSpeeds = growthSpeeds.filter((speed) => speed > 0);
-  const zeroRolls = growthSpeeds.length - nonZeroSpeeds.length;
-  if (zeroRolls >= growthSpeeds.length) {
-    ic2GrowthCycleCache.set(cacheKey, -1);
-    return -1;
-  }
-
-  const stageGoal = profile.tier * 200;
-  const stageGoals = [0, stageGoal, stageGoal, stageGoal];
-  const startStageFrequency = new Map([
-    [1, 1],
-    [2, 1],
-    [3, 1],
-  ]);
-  const frequencySum = [...startStageFrequency.values()].reduce((sum, value) => sum + value, 0);
-  const averageCyclesByStage = stageGoals.map((goal) => averageCyclesToGoal(nonZeroSpeeds, goal));
-  const normalizedStageFrequencies = stageGoals.map(
-    (_goal, stage) => ((startStageFrequency.get(stage) ?? 0) * stageGoals.length) / frequencySum,
-  );
-  const frequencyMultipliers = new Array(averageCyclesByStage.length).fill(1);
-
-  convolveSignalInPlace(
-    frequencyMultipliers,
-    normalizedStageFrequencies,
-    new Array(averageCyclesByStage.length).fill(0),
-    0,
-    frequencyMultipliers.length,
-    0,
-  );
-
-  const average =
-    averageCyclesByStage.reduce(
-      (sum, value, index) => sum + value * (frequencyMultipliers[index] ?? 1),
-      0,
-    ) / averageCyclesByStage.length;
-  const zeroRollAdjustedAverage =
-    zeroRolls > 0 ? (average / nonZeroSpeeds.length) * growthSpeeds.length : average;
-
-  ic2GrowthCycleCache.set(cacheKey, zeroRollAdjustedAverage);
-  return zeroRollAdjustedAverage;
-}
-
-function ic2AverageGrowthRate(
-  stats: CropStatsPreset,
-  profile: Ic2CropSimulationProfile,
-  rngRoll: number,
-) {
-  const base = 3 + rngRoll + stats.growth;
-  const need = Math.max(0, (profile.tier - 1) * 4 + stats.growth + stats.gain + stats.resistance);
-  const have = profile.environmentScore;
-
-  if (have >= need) {
-    return Math.trunc((base * (100 + (have - need))) / 100);
-  }
-
-  const penalty = (need - have) * 4;
-  if (penalty > 100) {
-    return stats.resistance >= 31 ? 0 : -1;
-  }
-  return Math.max(0, Math.trunc((base * (100 - penalty)) / 100));
-}
-
-function averageCyclesToGoal(speeds: number[], goal: number) {
-  if (goal <= 0) {
-    return 1;
-  }
-
-  const maxSpeed = speeds[speeds.length - 1] ?? 1;
-  const goalCap = maxSpeed * 1000;
-  let cappedGoal = goal;
-  let multiplier = 1;
-
-  if (goal > goalCap) {
-    multiplier = goal / goalCap;
-    cappedGoal = goalCap;
-  }
-
-  const signal = new Array(cappedGoal).fill(0);
-  signal[0] = 1;
-  const kernel = tabulate(speeds, 1 / speeds.length);
-  const target = new Array(signal.length).fill(0);
-  const min = speeds[0] ?? 0;
-  const max = maxSpeed;
-  let averageRolls = 1;
-  let iteration = 0;
-  let probability: number;
-
-  do {
-    probability = convolveSignalInPlace(signal, kernel, target, min, max, iteration);
-    averageRolls += probability;
-    iteration += 1;
-  } while (probability >= 0.1 / cappedGoal);
-
-  return averageRolls * multiplier;
-}
-
-function tabulate(values: number[], multiplier: number) {
-  const max = Math.max(...values);
-  const tabulated = new Array(max + 1).fill(0);
-  for (const value of values) {
-    tabulated[value] += multiplier;
-  }
-  return tabulated;
-}
-
-function convolveSignalInPlace(
-  signal: number[],
-  kernel: number[],
-  target: number[],
-  minValue: number,
-  maxValue: number,
-  iteration: number,
-) {
-  let sum = 0;
-  const maxK = Math.min(signal.length, (iteration + 1) * maxValue + 1);
-  const startAt = Math.min(signal.length, minValue * (iteration + 1));
-  let k = Math.max(0, startAt - kernel.length);
-
-  for (; k < startAt; k += 1) {
-    target[k] = 0;
-  }
-
-  for (; k < maxK; k += 1) {
-    target[k] = 0;
-    for (let i = Math.max(0, k - kernel.length + 1); i <= k; i += 1) {
-      const value = (signal[i] ?? 0) * (kernel[k - i] ?? 0);
-      sum += value;
-      target[k] = (target[k] ?? 0) + value;
-    }
-  }
-
-  for (let index = 0; index < signal.length; index += 1) {
-    signal[index] = target[index] ?? 0;
-  }
-
-  return sum;
-}
-
-function roundMultiplier(value: number) {
-  return Math.round(value * 1000) / 1000;
 }
 
 function selectControl({

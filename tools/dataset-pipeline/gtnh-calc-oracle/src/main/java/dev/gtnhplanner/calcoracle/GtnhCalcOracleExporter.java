@@ -210,6 +210,7 @@ public final class GtnhCalcOracleExporter {
                     exportedRecipe.put("fluidInputs", fluidStacks(recipe.mFluidInputs));
                     exportedRecipe.put("fluidOutputs", fluidStacks(recipe.mFluidOutputs));
                     exportedRecipe.put("nonConsumedInputs", specialItems(recipe.mSpecialItems));
+                    putIfPresent(exportedRecipe, "neiLayout", gregtechNeiLayout(map, recipe));
                     exportedRecipe.put("runtimeCalculation", buildGtRuntimeCalculation(map.unlocalizedName, name, recipe));
                     recipes.add(exportedRecipe);
                     index++;
@@ -227,6 +228,144 @@ public final class GtnhCalcOracleExporter {
         }
 
         return domain;
+    }
+
+    private Map<String, Object> gregtechNeiLayout(RecipeMap<RecipeMapBackend> recipeMap, GTRecipe recipe) {
+        try {
+            Object frontend = invokeBest(recipeMap, "getFrontend", new Object[0]);
+            if (frontend == null) {
+                return null;
+            }
+
+            Map<String, Object> layout = map();
+            layout.put("source", "gregtech-recipe-map-frontend");
+            layout.put("handlerClass", frontend.getClass().getName());
+
+            Object neiProperties = invokeBest(frontend, "getNEIProperties", new Object[0]);
+            Object backgroundSize = readField(neiProperties, "recipeBackgroundSize");
+            Map<String, Object> canvas = sizeMap(backgroundSize);
+            if (canvas != null) {
+                layout.put("canvas", canvas);
+            }
+
+            Object uiProperties = invokeBest(frontend, "getUIProperties", new Object[0]);
+            Map<String, Object> slotCapacity = map();
+            putIfPresent(slotCapacity, "maxItemInputs", firstNumber(uiProperties, "maxItemInputs"));
+            putIfPresent(slotCapacity, "maxItemOutputs", firstNumber(uiProperties, "maxItemOutputs"));
+            putIfPresent(slotCapacity, "maxFluidInputs", firstNumber(uiProperties, "maxFluidInputs"));
+            putIfPresent(slotCapacity, "maxFluidOutputs", firstNumber(uiProperties, "maxFluidOutputs"));
+            layout.put("slotCapacity", slotCapacity);
+
+            List<Map<String, Object>> slots = new ArrayList<Map<String, Object>>();
+            int itemInputCount = recipe.mInputs == null ? 0 : recipe.mInputs.length;
+            int itemOutputCount = recipe.mOutputs == null ? 0 : recipe.mOutputs.length;
+            int fluidInputCount = recipe.mFluidInputs == null ? 0 : recipe.mFluidInputs.length;
+            int fluidOutputCount = recipe.mFluidOutputs == null ? 0 : recipe.mFluidOutputs.length;
+            int maxItemInputs = Math.max(itemInputCount, readIntField(uiProperties, "maxItemInputs"));
+            int maxItemOutputs = Math.max(itemOutputCount, readIntField(uiProperties, "maxItemOutputs"));
+            int maxFluidInputs = Math.max(fluidInputCount, readIntField(uiProperties, "maxFluidInputs"));
+            int maxFluidOutputs = Math.max(fluidOutputCount, readIntField(uiProperties, "maxFluidOutputs"));
+            List<Map<String, Object>> specialInputs = specialItems(recipe.mSpecialItems);
+            if (!specialInputs.isEmpty()) {
+                Object specialPosition = invokeBest(frontend, "getSpecialItemPosition", new Object[0]);
+                Map<String, Object> slot = gregtechNeiSlot("input", "item", itemInputCount, specialPosition);
+                if (slot != null) {
+                    slots.add(slot);
+                }
+            }
+
+            addGregtechNeiSlots(slots, frontend, "getItemInputPositions", maxItemInputs, "input", "item", 0);
+            addGregtechNeiSlots(slots, frontend, "getItemOutputPositions", maxItemOutputs, "output", "item", 0);
+            addGregtechNeiSlots(slots, frontend, "getFluidInputPositions", maxFluidInputs, "input", "fluid", 0);
+            addGregtechNeiSlots(slots, frontend, "getFluidOutputPositions", maxFluidOutputs, "output", "fluid", 0);
+            layout.put("slots", slots);
+
+            List<Map<String, Object>> progressBars = new ArrayList<Map<String, Object>>();
+            Object useProgressBar = readField(uiProperties, "useProgressBar");
+            if (Boolean.TRUE.equals(useProgressBar)) {
+                Map<String, Object> progressBar = map();
+                Object progressBarPos = readField(uiProperties, "progressBarPos");
+                Object progressBarSize = readField(uiProperties, "progressBarSize");
+                Number x = coordinate(progressBarPos, "x");
+                Number y = coordinate(progressBarPos, "y");
+                Number width = coordinate(progressBarSize, "width");
+                Number height = coordinate(progressBarSize, "height");
+                if (x != null && y != null && width != null && height != null) {
+                    progressBar.put("x", Integer.valueOf(x.intValue()));
+                    progressBar.put("y", Integer.valueOf(y.intValue()));
+                    progressBar.put("width", Integer.valueOf(width.intValue()));
+                    progressBar.put("height", Integer.valueOf(height.intValue()));
+                    Object direction = readField(uiProperties, "progressBarDirection");
+                    progressBar.put("direction", direction == null ? "right" : String.valueOf(direction));
+                    progressBar.put("texture", "arrow");
+                    progressBars.add(progressBar);
+                }
+            }
+            layout.put("progressBars", progressBars);
+            return layout;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void addGregtechNeiSlots(
+        List<Map<String, Object>> slots,
+        Object frontend,
+        String methodName,
+        int count,
+        String side,
+        String kind,
+        int firstIndex
+    ) {
+        Object rawPositions = invokeBest(frontend, methodName, new Object[] { Integer.valueOf(count) });
+        int index = firstIndex;
+        for (Object position : iterable(rawPositions)) {
+            if (index >= firstIndex + count) {
+                break;
+            }
+            Map<String, Object> slot = gregtechNeiSlot(side, kind, index, position);
+            if (slot != null) {
+                slots.add(slot);
+            }
+            index++;
+        }
+    }
+
+    private Map<String, Object> gregtechNeiSlot(String side, String kind, int slotIndex, Object position) {
+        Number x = coordinate(position, "x");
+        Number y = coordinate(position, "y");
+        if (x == null || y == null) {
+            return null;
+        }
+        Map<String, Object> slot = map();
+        slot.put("side", side);
+        slot.put("kind", kind);
+        slot.put("slotIndex", Integer.valueOf(slotIndex));
+        slot.put("x", Integer.valueOf(x.intValue()));
+        slot.put("y", Integer.valueOf(y.intValue()));
+        return slot;
+    }
+
+    private Map<String, Object> sizeMap(Object size) {
+        Number width = coordinate(size, "width");
+        Number height = coordinate(size, "height");
+        if (width == null || height == null) {
+            return null;
+        }
+        Map<String, Object> value = map();
+        value.put("width", Integer.valueOf(width.intValue()));
+        value.put("height", Integer.valueOf(height.intValue()));
+        return value;
+    }
+
+    private Number coordinate(Object value, String name) {
+        Number fieldValue = asNumber(readField(value, name));
+        if (fieldValue != null) {
+            return fieldValue;
+        }
+        return asNumber(
+            invokeBest(value, "get" + Character.toUpperCase(name.charAt(0)) + name.substring(1), new Object[0])
+        );
     }
 
     private Map<String, Object> exportCrafting(List<Map<String, Object>> adapters) {
@@ -2456,7 +2595,10 @@ public final class GtnhCalcOracleExporter {
             return "";
         }
         String registryId = String.valueOf(Item.itemRegistry.getNameForObject(stack.getItem()));
-        return registryId + "@" + stack.getItemDamage() + "x" + stack.stackSize;
+        String nbt = stack.stackTagCompound == null
+            ? ""
+            : "#nbt-" + sha1(stack.stackTagCompound.toString()).substring(0, 12);
+        return canonicalRegistryId(registryId) + "@" + stack.getItemDamage() + nbt;
     }
 
     private String modId(String registryId) {

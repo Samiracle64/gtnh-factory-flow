@@ -3,6 +3,7 @@ import type {
   FactoryNode,
   MachineTier,
   Recipe,
+  RecipeInput,
   RecipeOutput,
   RuntimeCalculationVariant,
 } from "@/lib/model/types";
@@ -58,6 +59,38 @@ export function getRuntimeCalculationOutputs(
   });
 }
 
+export function getRuntimeCalculationInputs(
+  recipe: Pick<Recipe, "runtimeCalculation" | "inputs">,
+  node: Pick<FactoryNode, "machineHandlerId" | "overclockTier" | "coilTier" | "machineConfigTiers">,
+): RecipeInput[] | undefined {
+  const variant = selectRuntimeCalculationVariant(recipe, node);
+  if (!variant?.inputs?.length) {
+    return undefined;
+  }
+
+  return variant.inputs.map((runtimeInput) => {
+    const existing = recipe.inputs.find(
+      (input) => input.kind === runtimeInput.kind && input.id === runtimeInput.id,
+    );
+    return {
+      ...existing,
+      kind: runtimeInput.kind,
+      id: runtimeInput.id,
+      amount: runtimeInput.amount,
+      displayName: existing?.displayName,
+      iconPath: existing?.iconPath,
+      iconAtlas: existing?.iconAtlas,
+      dominantColor: existing?.dominantColor,
+      modId: existing?.modId,
+      tooltip: existing?.tooltip,
+      neiSlot: existing?.neiSlot,
+      alternatives: existing?.alternatives,
+      optional: existing?.optional,
+      consumed: existing?.consumed,
+    };
+  });
+}
+
 export function runtimeCalculationWarning(
   recipe: Pick<Recipe, "runtimeCalculation" | "name">,
   node: Pick<FactoryNode, "machineHandlerId" | "overclockTier" | "coilTier" | "machineConfigTiers">,
@@ -103,17 +136,6 @@ function runtimeVariantScore(
     score += 4;
   }
   const variantConfig = variant.machineConfigTiers;
-  const selectedConfig = node.machineConfigTiers ?? {};
-  if (!variantConfig && Object.keys(selectedConfig).length > 0) {
-    return -1;
-  }
-  if (variantConfig) {
-    for (const controlId of Object.keys(selectedConfig)) {
-      if (!Object.prototype.hasOwnProperty.call(variantConfig, controlId)) {
-        return -1;
-      }
-    }
-  }
   for (const [controlId, key] of Object.entries(variantConfig ?? {})) {
     const selectedKey = node.machineConfigTiers?.[controlId];
     if (selectedKey !== undefined && selectedKey !== key) {
