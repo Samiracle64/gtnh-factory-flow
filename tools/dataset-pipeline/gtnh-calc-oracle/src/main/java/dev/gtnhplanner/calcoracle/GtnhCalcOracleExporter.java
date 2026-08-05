@@ -789,7 +789,9 @@ public final class GtnhCalcOracleExporter {
         if (handler == null) return null;
         String className = handler.getClass().getName();
         String lowerClassName = className.toLowerCase(Locale.ROOT);
-        if (!lowerClassName.contains("thaum") && !lowerClassName.contains("tcnei")) return null;
+        if (!lowerClassName.contains("thaum")
+            && !lowerClassName.contains("tcnei")
+            && !lowerClassName.contains("aspectrecipeindex")) return null;
         String fingerprint = (
             className
                 + " "
@@ -800,7 +802,7 @@ public final class GtnhCalcOracleExporter {
                 + safeString(invokeBest(handler, "getRecipeName", new Object[0]))
         ).toLowerCase(Locale.ROOT);
         if (fingerprint.contains("infusion")) return "infusion";
-        if (fingerprint.contains("crucible")) return "crucible";
+        if (fingerprint.contains("crucible") || fingerprint.contains("alchemy")) return "crucible";
         if (fingerprint.contains("arcane")) return "arcane";
         return null;
     }
