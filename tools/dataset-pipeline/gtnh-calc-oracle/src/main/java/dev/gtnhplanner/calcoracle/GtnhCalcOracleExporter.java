@@ -764,7 +764,12 @@ public final class GtnhCalcOracleExporter {
             return handlers;
         }
 
-        String[] legacyHandlers = new String[] {
+        String[] fallbackHandlers = new String[] {
+            "com.gtnewhorizons.aspectrecipeindex.nei.InfusionRecipeHandler",
+            "com.gtnewhorizons.aspectrecipeindex.nei.AlchemyRecipeHandler",
+            "com.gtnewhorizons.aspectrecipeindex.nei.arcaneworkbench.ShapedArcaneRecipeHandler",
+            "com.gtnewhorizons.aspectrecipeindex.nei.arcaneworkbench.ShapelessArcaneRecipeHandler",
+            "com.gtnewhorizons.aspectrecipeindex.nei.arcaneworkbench.WandRecipeHandler",
             "ru.timeconqueror.tcneiadditions.nei.TCNAInfusionRecipeHandler",
             "ru.timeconqueror.tcneiadditions.nei.TCNACrucibleRecipeHandler",
             "ru.timeconqueror.tcneiadditions.nei.arcaneworkbench.ArcaneCraftingShapedHandler",
@@ -774,7 +779,7 @@ public final class GtnhCalcOracleExporter {
             "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.ArcaneShapedRecipeHandler",
             "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.ArcaneShapelessRecipeHandler"
         };
-        for (String className : legacyHandlers) {
+        for (String className : fallbackHandlers) {
             if (!isClassPresent(className)) continue;
             try {
                 handlers.add(Class.forName(className).getConstructor().newInstance());
@@ -803,7 +808,7 @@ public final class GtnhCalcOracleExporter {
         ).toLowerCase(Locale.ROOT);
         if (fingerprint.contains("infusion")) return "infusion";
         if (fingerprint.contains("crucible") || fingerprint.contains("alchemy")) return "crucible";
-        if (fingerprint.contains("arcane")) return "arcane";
+        if (fingerprint.contains("arcane") || fingerprint.contains("wands")) return "arcane";
         return null;
     }
 
