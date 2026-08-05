@@ -1335,6 +1335,7 @@ function addRecipe(recipe) {
     return;
   }
   recipeSignatures.add(signature);
+  const stableId = recipeId(recipe.kind ?? "recipe", hashRecipe(signature));
   for (const resource of [
     ...recipe.inputs,
     ...recipe.outputs,
@@ -1345,6 +1346,7 @@ function addRecipe(recipe) {
   }
   recipes.push({
     ...recipe,
+    id: stableId,
     inputs: recipe.inputs.map(compactRecipeResource),
     outputs: recipe.outputs.map(compactRecipeResource),
   });

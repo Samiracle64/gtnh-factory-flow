@@ -41,7 +41,7 @@ describe("merge-client-presentation", () => {
           runtimeCalculation: { status: "computed", variants: [{ id: "server-crop" }] },
         },
         {
-          id: "thaumcraft:shared",
+          id: "thaumcraft:client-process-specific-id",
           kind: "thaumcraft_infusion",
           inputs: [seed],
           outputs: [{ kind: "item", id: "Thaumcraft:ItemEldritchObject@3", amount: 1 }],
@@ -49,7 +49,10 @@ describe("merge-client-presentation", () => {
           nei: { additionalInfo: ["authoritative"], slots: [] },
         },
       ],
-      oreDictionary: {},
+      oreDictionary: {
+        sharedOre: ["server:item", "shared:item"],
+        serverOre: ["server:item"],
+      },
       recipeMaps: ["Crop Harvester", "Infusion"],
       recipeMapIcons: [{ recipeMap: "Crop Harvester", resource: seed }],
     });
@@ -62,6 +65,12 @@ describe("merge-client-presentation", () => {
           ...seed,
           iconPath: "/datasets/gtnh/stable-test/textures/rendered/redwheat.png",
           dominantColor: "#cc3322",
+        },
+        {
+          kind: "item",
+          id: "Thaumcraft:ClientOnly",
+          displayName: "Client-only research item",
+          iconPath: "/datasets/gtnh/stable-test/textures/rendered/client-only.png",
         },
       ],
       recipes: [
@@ -79,10 +88,35 @@ describe("merge-client-presentation", () => {
             slots: [{ side: "input", kind: "item", slotIndex: 0, x: 12, y: 24 }],
           },
         },
+        {
+          id: "thaumcraft:client-only",
+          kind: "thaumcraft_arcane",
+          category: "thaumcraft",
+          inputs: [seed],
+          outputs: [{ kind: "item", id: "Thaumcraft:ClientOnly", amount: 1 }],
+          runtimeCalculation: { status: "computed", variants: [{ id: "client-only-runtime" }] },
+        },
+        {
+          id: "crop:client-runtime-mismatch",
+          kind: "crop_produce",
+          category: "ic2-crop",
+          machineType: "IC2 Crop",
+          inputs: [seed],
+          outputs: [{ kind: "item", id: "IC2:wrongClientDrop", amount: 1 }],
+          runtimeCalculation: { status: "computed", variants: [{ id: "client-crop" }] },
+        },
       ],
-      oreDictionary: {},
-      recipeMaps: ["Infusion"],
-      recipeMapIcons: [],
+      oreDictionary: {
+        clientOre: ["client:item"],
+        sharedOre: ["client:item", "shared:item"],
+      },
+      recipeMaps: ["Arcane Worktable", "Infusion"],
+      recipeMapIcons: [
+        {
+          recipeMap: "Arcane Worktable",
+          resource: { kind: "item", id: "Thaumcraft:ClientOnly" },
+        },
+      ],
     });
     await fs.writeFile(path.join(serverDir, "oracle", "oracle-report.json"), "server-report");
     await fs.writeFile(path.join(clientDir, "oracle", "oracle-report.json"), "client-report");
@@ -102,9 +136,10 @@ describe("merge-client-presentation", () => {
 
     expect(result.status, result.stderr).toBe(0);
     const merged = JSON.parse(await fs.readFile(serverDatasetPath, "utf8"));
-    expect(merged.recipes).toHaveLength(2);
+    expect(merged.recipes).toHaveLength(3);
     expect(merged.recipes[0].runtimeCalculation.variants[0].id).toBe("server-crop");
     expect(merged.recipes[1].runtimeCalculation.variants[0].id).toBe("server-runtime");
+    expect(merged.recipes[2].runtimeCalculation.variants[0].id).toBe("client-only-runtime");
     expect(merged.recipes[1].nei).toMatchObject({
       additionalInfo: ["authoritative"],
       source: "gtnh-nei-handler",
@@ -116,12 +151,23 @@ describe("merge-client-presentation", () => {
     });
     expect(merged.recipes[0].inputs[0].iconPath).toContain("redwheat.png");
     expect(merged.recipeMapIcons[0].resource.iconPath).toContain("redwheat.png");
+    expect(merged.recipeMaps).toContain("Arcane Worktable");
+    expect(merged.recipeMapIcons[1].resource.iconPath).toContain("client-only.png");
+    expect(merged.oreDictionary).toEqual({
+      sharedOre: ["client:item", "server:item", "shared:item"],
+      serverOre: ["server:item"],
+      clientOre: ["client:item"],
+    });
     expect(await fs.readFile(path.join(serverDir, "oracle", "oracle-report.json"), "utf8")).toBe(
       "server-report",
     );
     expect(
       await fs.readFile(path.join(serverDir, "oracle", "client-oracle-report.json"), "utf8"),
     ).toBe("client-report");
+    const mergeReport = JSON.parse(
+      await fs.readFile(path.join(serverDir, "oracle", "client-presentation-report.json"), "utf8"),
+    );
+    expect(mergeReport.skippedClientRecipeCounts).toEqual({ "ic2-crop": 1 });
     await expect(
       fs.stat(path.join(serverDir, "textures", "rendered", "redwheat.png")),
     ).resolves.toBeDefined();
@@ -142,6 +188,16 @@ async function writeDataset(filePath: string, dataset: Record<string, unknown>) 
         lines.push(`    ${JSON.stringify(entry)}${entryIndex < value.length - 1 ? "," : ""}`);
       });
       lines.push("  ]");
+    } else if (key === "oreDictionary" && value && typeof value === "object") {
+      lines[lines.length - 1] += prefix;
+      lines.push(`  ${JSON.stringify(key)}: {`);
+      const objectEntries = Object.entries(value);
+      objectEntries.forEach(([entryKey, entryValue], entryIndex) => {
+        lines.push(
+          `    ${JSON.stringify(entryKey)}: ${JSON.stringify(entryValue)}${entryIndex < objectEntries.length - 1 ? "," : ""}`,
+        );
+      });
+      lines.push("  }");
     } else {
       lines[lines.length - 1] += prefix;
       lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(value)}`);

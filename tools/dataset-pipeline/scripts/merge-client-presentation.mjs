@@ -24,26 +24,96 @@ if (!existsSync(clientDatasetPath)) {
 
 const resourceVisuals = new Map();
 const recipeNeiLayouts = new Map();
+const serverResourceKeys = new Set();
+const serverRecipesBySignature = new Map();
+const serverRecipeMaps = new Set();
+const serverRecipeMapIcons = new Set();
+const clientOnlyResources = [];
+const clientOnlyRecipes = [];
+const clientOnlyRecipeMaps = [];
+const clientOnlyRecipeMapIcons = [];
+const clientOreDictionary = new Map();
+const skippedClientRecipeCounts = new Map();
+const clientOnlyRecipeCategories = new Set(["crafting", "furnace", "thaumcraft"]);
 let clientRecipeCount = 0;
 
-await visitDatasetArrays(clientDatasetPath, {
-  resources(resource) {
-    const visual = presentationForResource(resource);
-    if (visual) {
-      resourceVisuals.set(resourceKey(resource), visual);
-    }
+await visitDatasetContainers(serverDatasetPath, {
+  arrays: {
+    resources(resource) {
+      const key = resourceKey(resource);
+      if (key) serverResourceKeys.add(key);
+    },
+    recipes(recipe) {
+      if (recipe?.id) serverRecipesBySignature.set(recipeSignature(recipe), recipe.id);
+    },
+    recipeMaps(recipeMap) {
+      if (typeof recipeMap === "string") serverRecipeMaps.add(recipeMap);
+    },
+    recipeMapIcons(entry) {
+      if (entry?.recipeMap) serverRecipeMapIcons.add(entry.recipeMap);
+    },
   },
-  recipes(recipe) {
-    clientRecipeCount += 1;
-    if (recipe?.id && isClientOnlyNeiLayout(recipe.nei)) {
-      recipeNeiLayouts.set(recipe.id, recipe.nei);
-    }
+});
+
+await visitDatasetContainers(clientDatasetPath, {
+  arrays: {
+    resources(resource) {
+      const key = resourceKey(resource);
+      const visual = presentationForResource(resource);
+      if (key && visual) resourceVisuals.set(key, visual);
+      if (key && !serverResourceKeys.has(key)) {
+        clientOnlyResources.push(resource);
+        serverResourceKeys.add(key);
+      }
+    },
+    recipes(recipe) {
+      clientRecipeCount += 1;
+      if (!recipe?.id) return;
+      const serverRecipeId = serverRecipesBySignature.get(recipeSignature(recipe));
+      if (!serverRecipeId) {
+        if (clientOnlyRecipeCategories.has(recipe.category)) {
+          clientOnlyRecipes.push(recipe);
+          serverRecipesBySignature.set(recipeSignature(recipe), recipe.id);
+        } else {
+          const category = recipe.category ?? recipe.kind ?? "unknown";
+          skippedClientRecipeCounts.set(
+            category,
+            (skippedClientRecipeCounts.get(category) ?? 0) + 1,
+          );
+        }
+      } else if (isClientNeiPresentation(recipe.nei)) {
+        recipeNeiLayouts.set(serverRecipeId, recipe.nei);
+      }
+    },
+    recipeMaps(recipeMap) {
+      if (typeof recipeMap === "string" && !serverRecipeMaps.has(recipeMap)) {
+        clientOnlyRecipeMaps.push(recipeMap);
+        serverRecipeMaps.add(recipeMap);
+      }
+    },
+    recipeMapIcons(entry) {
+      if (entry?.recipeMap && !serverRecipeMapIcons.has(entry.recipeMap)) {
+        clientOnlyRecipeMapIcons.push(entry);
+        serverRecipeMapIcons.add(entry.recipeMap);
+      }
+    },
+  },
+  objects: {
+    oreDictionary(key, value) {
+      clientOreDictionary.set(key, value);
+    },
   },
 });
 
 if (clientRecipeCount === 0) {
   throw new Error("Client presentation dataset contains no recipes.");
 }
+
+clientOnlyResources.sort(compareById);
+clientOnlyRecipeMaps.sort((left, right) => left.localeCompare(right));
+clientOnlyRecipeMapIcons.sort((left, right) =>
+  String(left.recipeMap).localeCompare(String(right.recipeMap)),
+);
 
 await copyClientArtifacts();
 
@@ -53,6 +123,13 @@ const stats = {
   clientRecipeCount,
   resourceVisualCount: resourceVisuals.size,
   clientNeiLayoutCount: recipeNeiLayouts.size,
+  clientOnlyResourceCount: clientOnlyResources.length,
+  clientOnlyRecipeCount: clientOnlyRecipes.length,
+  clientOnlyRecipeMapCount: clientOnlyRecipeMaps.length,
+  clientOnlyRecipeMapIconCount: clientOnlyRecipeMapIcons.length,
+  skippedClientRecipeCounts: Object.fromEntries(
+    [...skippedClientRecipeCounts.entries()].sort(([left], [right]) => left.localeCompare(right)),
+  ),
   serverRecipeCount: 0,
   decoratedResourceReferenceCount: 0,
   mergedNeiLayoutCount: 0,
@@ -81,7 +158,8 @@ await fs.writeFile(
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
       source: "client-presentation-pass",
-      authority: "The server oracle remains authoritative for recipes and runtime calculations.",
+      authority:
+        "The server oracle remains authoritative for shared recipes and runtime calculations. Recipes exposed only by client registries or NEI are appended without replacing server records.",
       ...stats,
     },
     null,
@@ -90,7 +168,7 @@ await fs.writeFile(
 );
 
 console.log(
-  `Merged ${stats.resourceVisualCount} client resource visual(s) and ${stats.mergedNeiLayoutCount}/${stats.clientNeiLayoutCount} client-only NEI layout(s) into ${stats.serverRecipeCount} authoritative server recipe(s).`,
+  `Preserved ${stats.serverRecipeCount} authoritative server recipe(s), appended ${stats.clientOnlyRecipeCount} client-only recipe(s), and merged ${stats.resourceVisualCount} client resource visual(s) plus ${stats.mergedNeiLayoutCount}/${stats.clientNeiLayoutCount} shared client NEI layout(s).`,
 );
 
 async function rewriteAuthoritativeDataset(outputPath, mergeStats) {
@@ -100,10 +178,11 @@ async function rewriteAuthoritativeDataset(outputPath, mergeStats) {
   });
   const output = createWriteStream(outputPath, { encoding: "utf8" });
   let currentArray;
+  let currentObject;
 
   try {
     for await (const line of input) {
-      const arrayStart = currentArray ? undefined : topLevelArrayStart(line);
+      const arrayStart = currentArray || currentObject ? undefined : topLevelArrayStart(line);
       if (arrayStart) {
         currentArray = arrayStart;
         await writeLine(output, `${line}\n`);
@@ -111,7 +190,40 @@ async function rewriteAuthoritativeDataset(outputPath, mergeStats) {
       }
 
       if (currentArray && isArrayEnd(line)) {
+        const additions = additionsForArray(currentArray);
+        for (let index = 0; index < additions.length; index += 1) {
+          const value = additions[index];
+          mergeStats.decoratedResourceReferenceCount += applyResourcePresentation(value);
+          await writeLine(
+            output,
+            `    ${JSON.stringify(value)}${index < additions.length - 1 ? "," : ""}\n`,
+          );
+        }
         currentArray = undefined;
+        await writeLine(output, `${line}\n`);
+        continue;
+      }
+
+      const objectStart = currentArray || currentObject ? undefined : topLevelObjectStart(line);
+      if (objectStart) {
+        currentObject = objectStart;
+        await writeLine(output, `${line}\n`);
+        continue;
+      }
+
+      if (currentObject && isObjectEnd(line)) {
+        if (currentObject === "oreDictionary") {
+          const remainingEntries = [...clientOreDictionary.entries()];
+          for (let index = 0; index < remainingEntries.length; index += 1) {
+            const [key, value] = remainingEntries[index];
+            await writeLine(
+              output,
+              `    ${JSON.stringify(key)}: ${JSON.stringify(value)}${index < remainingEntries.length - 1 ? "," : ""}\n`,
+            );
+          }
+          clientOreDictionary.clear();
+        }
+        currentObject = undefined;
         await writeLine(output, `${line}\n`);
         continue;
       }
@@ -119,6 +231,7 @@ async function rewriteAuthoritativeDataset(outputPath, mergeStats) {
       if (
         currentArray === "resources" ||
         currentArray === "recipes" ||
+        currentArray === "recipeMaps" ||
         currentArray === "recipeMapIcons"
       ) {
         const item = parseArrayItem(line, currentArray);
@@ -133,7 +246,18 @@ async function rewriteAuthoritativeDataset(outputPath, mergeStats) {
         mergeStats.decoratedResourceReferenceCount += applyResourcePresentation(item.value);
         await writeLine(
           output,
-          `    ${JSON.stringify(item.value)}${item.trailingComma ? "," : ""}\n`,
+          `    ${JSON.stringify(item.value)}${item.trailingComma || additionsForArray(currentArray).length > 0 ? "," : ""}\n`,
+        );
+        continue;
+      }
+
+      if (currentObject === "oreDictionary") {
+        const item = parseObjectItem(line, currentObject);
+        const mergedValue = mergeOreDictionaryValues(item.value, clientOreDictionary.get(item.key));
+        clientOreDictionary.delete(item.key);
+        await writeLine(
+          output,
+          `    ${JSON.stringify(item.key)}: ${JSON.stringify(mergedValue)}${item.trailingComma || clientOreDictionary.size > 0 ? "," : ""}\n`,
         );
         continue;
       }
@@ -149,15 +273,16 @@ async function rewriteAuthoritativeDataset(outputPath, mergeStats) {
   }
 }
 
-async function visitDatasetArrays(datasetPath, visitors) {
+async function visitDatasetContainers(datasetPath, visitors) {
   const lines = readline.createInterface({
     input: createReadStream(datasetPath, { encoding: "utf8" }),
     crlfDelay: Infinity,
   });
   let currentArray;
+  let currentObject;
 
   for await (const line of lines) {
-    const arrayStart = currentArray ? undefined : topLevelArrayStart(line);
+    const arrayStart = currentArray || currentObject ? undefined : topLevelArrayStart(line);
     if (arrayStart) {
       currentArray = arrayStart;
       continue;
@@ -166,9 +291,25 @@ async function visitDatasetArrays(datasetPath, visitors) {
       currentArray = undefined;
       continue;
     }
-    const visitor = currentArray ? visitors[currentArray] : undefined;
-    if (visitor) {
-      visitor(parseArrayItem(line, currentArray).value);
+
+    const objectStart = currentArray || currentObject ? undefined : topLevelObjectStart(line);
+    if (objectStart) {
+      currentObject = objectStart;
+      continue;
+    }
+    if (currentObject && isObjectEnd(line)) {
+      currentObject = undefined;
+      continue;
+    }
+
+    const arrayVisitor = currentArray ? visitors.arrays?.[currentArray] : undefined;
+    if (arrayVisitor) {
+      arrayVisitor(parseArrayItem(line, currentArray).value);
+    }
+    const objectVisitor = currentObject ? visitors.objects?.[currentObject] : undefined;
+    if (objectVisitor) {
+      const item = parseObjectItem(line, currentObject);
+      objectVisitor(item.key, item.value);
     }
   }
 }
@@ -182,6 +323,15 @@ function isArrayEnd(line) {
   return /^  \](?:,)?$/.test(line);
 }
 
+function topLevelObjectStart(line) {
+  const match = /^  ("(?:(?:\\.)|[^"\\])*"):\s*\{$/.exec(line);
+  return match ? JSON.parse(match[1]) : undefined;
+}
+
+function isObjectEnd(line) {
+  return /^  \}(?:,)?$/.test(line);
+}
+
 function parseArrayItem(line, arrayName) {
   const trimmed = line.trim();
   const trailingComma = trimmed.endsWith(",");
@@ -191,6 +341,54 @@ function parseArrayItem(line, arrayName) {
   } catch (error) {
     throw new Error(`Cannot parse ${arrayName} array item: ${error.message}`);
   }
+}
+
+function parseObjectItem(line, objectName) {
+  const trimmed = line.trim();
+  const trailingComma = trimmed.endsWith(",");
+  const jsonProperty = trailingComma ? trimmed.slice(0, -1) : trimmed;
+  const match = /^("(?:(?:\\.)|[^"\\])*"):\s*(.*)$/.exec(jsonProperty);
+  if (!match) {
+    throw new Error(`Cannot parse ${objectName} object property.`);
+  }
+  try {
+    return { key: JSON.parse(match[1]), value: JSON.parse(match[2]), trailingComma };
+  } catch (error) {
+    throw new Error(`Cannot parse ${objectName} object property: ${error.message}`);
+  }
+}
+
+function additionsForArray(arrayName) {
+  if (arrayName === "resources") return clientOnlyResources;
+  if (arrayName === "recipes") return clientOnlyRecipes;
+  if (arrayName === "recipeMaps") return clientOnlyRecipeMaps;
+  if (arrayName === "recipeMapIcons") return clientOnlyRecipeMapIcons;
+  return [];
+}
+
+function mergeOreDictionaryValues(serverValue, clientValue) {
+  if (!Array.isArray(serverValue) || !Array.isArray(clientValue)) {
+    return serverValue;
+  }
+  return [...new Set([...serverValue, ...clientValue])].sort();
+}
+
+function recipeSignature(recipe) {
+  return JSON.stringify({
+    machineType: recipe?.machineType,
+    inputs: (recipe?.inputs ?? []).map((entry) => [
+      entry.kind,
+      entry.id,
+      entry.amount,
+      entry.consumed,
+    ]),
+    outputs: (recipe?.outputs ?? []).map((entry) => [
+      entry.kind,
+      entry.id,
+      entry.amount,
+      entry.chance,
+    ]),
+  });
 }
 
 function presentationForResource(resource) {
@@ -205,7 +403,7 @@ function presentationForResource(resource) {
   return Object.keys(presentation).length > 0 ? presentation : undefined;
 }
 
-function isClientOnlyNeiLayout(nei) {
+function isClientNeiPresentation(nei) {
   return Boolean(
     nei &&
     typeof nei === "object" &&
@@ -237,6 +435,10 @@ function resourceKey(resource) {
   return typeof resource?.kind === "string" && typeof resource?.id === "string"
     ? `${resource.kind}:${resource.id}`
     : undefined;
+}
+
+function compareById(left, right) {
+  return String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
 }
 
 async function copyClientArtifacts() {
