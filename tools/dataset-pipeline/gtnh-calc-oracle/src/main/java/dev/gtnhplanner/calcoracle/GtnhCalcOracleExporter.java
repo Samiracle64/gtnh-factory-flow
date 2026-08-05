@@ -28,6 +28,8 @@ import net.minecraftforge.oredict.ShapelessOreRecipe;
 
 import java.io.File;
 import java.io.FileWriter;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -1137,12 +1139,21 @@ public final class GtnhCalcOracleExporter {
             try {
                 Class<?> registryClass = Class.forName("com.gtnewhorizon.cropsnh.farming.registries.CropRegistry");
                 Object registry = readStaticField(registryClass, "instance");
-                Object registered = invokeExactNoArg(registry, "getAllInRegistrationOrder");
+                // Do not reflect over CropRegistry methods on a dedicated server. Its public
+                // registerIcons signature references the client-only IIconRegister class.
+                Object registered = readField(registry, "registrationOrder");
+                if (registered == null) {
+                    Object registeredById = readField(registry, "cropRegistry");
+                    registered = registeredById instanceof Map ? ((Map<?, ?>) registeredById).values() : registeredById;
+                }
+                if (registered == null) {
+                    throw new IllegalStateException("CropsNH registry exposes neither registrationOrder nor cropRegistry");
+                }
                 int registeredCount = 0;
                 int visibleCount = 0;
                 for (Object crop : iterable(registered)) {
                     registeredCount++;
-                    Object hidden = invokeExactNoArg(crop, "hideFromNEI");
+                    Object hidden = invokeCropsNhCard(crop, "hideFromNEI", Boolean.TYPE);
                     if (hidden instanceof Boolean && ((Boolean) hidden).booleanValue()) continue;
                     visibleCount++;
                     Map<String, Object> exported = cropsNhCropCard(crop);
@@ -1194,7 +1205,7 @@ public final class GtnhCalcOracleExporter {
 
     private Map<String, Object> cropsNhCropCard(Object crop) {
         if (crop == null) return null;
-        String fullId = stringValue(invokeExactNoArg(crop, "getId"));
+        String fullId = stringValue(invokeCropsNhCard(crop, "getId", String.class));
         if (fullId == null || fullId.length() == 0) return null;
 
         String owner = "cropsnh";
@@ -1205,7 +1216,7 @@ public final class GtnhCalcOracleExporter {
             cropId = fullId.substring(separator + 1);
         }
 
-        String unlocalizedName = stringValue(invokeExactNoArg(crop, "getUnlocalizedName"));
+        String unlocalizedName = stringValue(invokeCropsNhCard(crop, "getUnlocalizedName", String.class));
         String name = unlocalizedName == null ? cropId : StatCollector.translateToLocal(unlocalizedName);
         List<Map<String, Object>> variants = cropsNhVariants(crop);
         if (variants.isEmpty()) return null;
@@ -1215,8 +1226,8 @@ public final class GtnhCalcOracleExporter {
         exported.put("id", cropId);
         exported.put("owner", owner);
         exported.put("name", name);
-        putIfPresent(exported, "tier", asNumber(invokeExactNoArg(crop, "getTier")));
-        putIfPresent(exported, "creator", stringValue(invokeExactNoArg(crop, "getCreator")));
+        putIfPresent(exported, "tier", asNumber(invokeCropsNhCard(crop, "getTier", Integer.TYPE)));
+        putIfPresent(exported, "creator", stringValue(invokeCropsNhCard(crop, "getCreator", String.class)));
         exported.put("harvestable", Boolean.TRUE);
         putIfPresent(exported, "variants", variants);
         putIfPresent(exported, "seed", variants.get(0).get("seed"));
@@ -1285,10 +1296,10 @@ public final class GtnhCalcOracleExporter {
 
     private List<Map<String, Object>> cropsNhDrops(Object crop, int gain) {
         List<Map<String, Object>> drops = new ArrayList<Map<String, Object>>();
-        Object rawDropTable = invokeExactNoArg(crop, "getDropTable");
+        Object rawDropTable = invokeCropsNhCard(crop, "getDropTable", Map.class);
         if (!(rawDropTable instanceof Map)) return drops;
 
-        Number rawDropChance = asNumber(invokeExactNoArg(crop, "getDropChance"));
+        Number rawDropChance = asNumber(invokeCropsNhCard(crop, "getDropChance", Float.TYPE));
         if (rawDropChance == null) return drops;
         double averageRounds = rawDropChance.doubleValue() * Math.pow(1.03D, gain);
         double averageGainBonus = (gain + 1) / 100.0D;
@@ -1316,8 +1327,8 @@ public final class GtnhCalcOracleExporter {
             Class<?> cropSticks = Class.forName("com.gtnewhorizon.cropsnh.tileentity.TileEntityCropSticks");
             int maximumNutrients = readStaticInt(cropSticks.getName(), "MAX_NUTRIENT_SCORE", -1);
             int tickRate = readStaticInt(cropSticks.getName(), "TICK_RATE", -1);
-            Number tier = asNumber(invokeExactNoArg(crop, "getTier"));
-            Number growthDuration = asNumber(invokeExactNoArg(crop, "getGrowthDuration"));
+            Number tier = asNumber(invokeCropsNhCard(crop, "getTier", Integer.TYPE));
+            Number growthDuration = asNumber(invokeCropsNhCard(crop, "getGrowthDuration", Integer.TYPE));
             if (maximumNutrients < 0 || tickRate <= 0 || tier == null || growthDuration == null) return null;
             Number growthRate = asNumber(
                 invokeStaticExact(
@@ -2726,10 +2737,51 @@ public final class GtnhCalcOracleExporter {
     private Object invokeCropsNhSeedItem(Object crop, Object seedStats) {
         if (crop == null || seedStats == null) return null;
         try {
+            Class<?> cropCardApi = Class.forName("com.gtnewhorizon.cropsnh.api.ICropCard");
             Class<?> seedStatsApi = Class.forName("com.gtnewhorizon.cropsnh.api.ISeedStats");
-            Method method = crop.getClass().getMethod("getSeedItem", seedStatsApi);
-            method.setAccessible(true);
-            return method.invoke(crop, seedStats);
+            return invokeVirtualExact(
+                crop,
+                cropCardApi,
+                "getSeedItem",
+                ItemStack.class,
+                new Class<?>[] { seedStatsApi },
+                new Object[] { seedStats }
+            );
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private Object invokeCropsNhCard(Object crop, String methodName, Class<?> returnType) {
+        if (crop == null) return null;
+        try {
+            return invokeVirtualExact(
+                crop,
+                Class.forName("com.gtnewhorizon.cropsnh.api.ICropCard"),
+                methodName,
+                returnType,
+                new Class<?>[0],
+                new Object[0]
+            );
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private Object invokeVirtualExact(
+        Object target,
+        Class<?> declaringType,
+        String methodName,
+        Class<?> returnType,
+        Class<?>[] parameterTypes,
+        Object[] args
+    ) {
+        if (target == null || declaringType == null || methodName == null || returnType == null) return null;
+        try {
+            return MethodHandles.publicLookup()
+                .findVirtual(declaringType, methodName, MethodType.methodType(returnType, parameterTypes))
+                .bindTo(target)
+                .invokeWithArguments(args);
         } catch (Throwable ignored) {
             return null;
         }
@@ -2755,10 +2807,9 @@ public final class GtnhCalcOracleExporter {
     private Object invokeStaticExact(Class<?> type, String methodName, Class<?>[] parameterTypes, Object[] args) {
         if (type == null || methodName == null) return null;
         try {
-            Method method = type.getMethod(methodName, parameterTypes);
-            if (!Modifier.isStatic(method.getModifiers())) return null;
-            method.setAccessible(true);
-            return method.invoke(null, args);
+            return MethodHandles.publicLookup()
+                .findStatic(type, methodName, MethodType.methodType(Integer.TYPE, parameterTypes))
+                .invokeWithArguments(args);
         } catch (Throwable ignored) {
             return null;
         }
