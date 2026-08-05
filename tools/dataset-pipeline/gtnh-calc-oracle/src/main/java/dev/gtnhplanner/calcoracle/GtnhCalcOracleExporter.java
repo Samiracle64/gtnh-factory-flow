@@ -474,6 +474,9 @@ public final class GtnhCalcOracleExporter {
                         if (neiLayout == null) {
                             neiLayout = neiLayoutsBySignature.get(thaumcraftSimpleRecipeSignature(recipe));
                         }
+                        if (neiLayout == null) {
+                            neiLayout = neiLayoutsBySignature.get(thaumcraftCompatibleRecipeSignature(recipe));
+                        }
                         putIfPresent(recipe, "neiLayout", neiLayout);
                         recipes.add(recipe);
                     }
@@ -715,6 +718,10 @@ public final class GtnhCalcOracleExporter {
                     String simpleSignature = safeString(layout.get("simpleSignature"));
                     if (simpleSignature.length() > 0 && !layoutsBySignature.containsKey(simpleSignature)) {
                         layoutsBySignature.put(simpleSignature, layout);
+                    }
+                    String compatibleSignature = thaumcraftCompatibleNeiLayoutSignature(type, layout);
+                    if (compatibleSignature.length() > 0 && !layoutsBySignature.containsKey(compatibleSignature)) {
+                        layoutsBySignature.put(compatibleSignature, layout);
                     }
                     exported++;
                 }
@@ -1054,6 +1061,106 @@ public final class GtnhCalcOracleExporter {
     private String thaumcraftSimpleRecipeSignature(Map<String, Object> recipe) {
         Object output = recipe.get("output");
         return safeString(recipe.get("type")) + ":" + resourceKey(output instanceof Map ? (Map<?, ?>) output : null);
+    }
+
+    private String thaumcraftCompatibleRecipeSignature(Map<String, Object> recipe) {
+        Object output = recipe.get("output");
+        List<Object> inputs = new ArrayList<Object>();
+        Object centralInput = recipe.get("centralInput");
+        Object catalyst = recipe.get("catalyst");
+        if (centralInput instanceof Map) inputs.add(centralInput);
+        if (catalyst instanceof Map) inputs.add(catalyst);
+        for (Object component : iterable(recipe.get("components"))) {
+            if (component instanceof Map) inputs.add(component);
+        }
+        for (Object aspect : iterable(recipe.get("aspects"))) {
+            if (aspect instanceof Map) inputs.add(aspect);
+        }
+        return thaumcraftCompatibleSignature(
+            safeString(recipe.get("type")),
+            output instanceof Map ? (Map<?, ?>) output : null,
+            inputs
+        );
+    }
+
+    private String thaumcraftCompatibleNeiLayoutSignature(
+        String type,
+        Map<String, Object> layout
+    ) {
+        List<Object> inputs = new ArrayList<Object>();
+        Map<?, ?> outputResource = null;
+        for (Object rawSlot : iterable(layout.get("slots"))) {
+            if (!(rawSlot instanceof Map)) continue;
+            Map<?, ?> slot = (Map<?, ?>) rawSlot;
+            Object resource = slot.get("resource");
+            if (!(resource instanceof Map)) continue;
+            if ("output".equals(safeString(slot.get("side"))) && outputResource == null) {
+                outputResource = (Map<?, ?>) resource;
+            } else if ("input".equals(safeString(slot.get("side")))) {
+                inputs.add(resource);
+            }
+        }
+        return thaumcraftCompatibleSignature(type, outputResource, inputs);
+    }
+
+    private String thaumcraftCompatibleSignature(String type, Map<?, ?> output, List<Object> inputs) {
+        String outputKey = resourceRegistryKey(output);
+        if (outputKey.length() == 0) return "";
+        List<String> fingerprints = new ArrayList<String>();
+        for (Object input : inputs) {
+            if (!(input instanceof Map)) continue;
+            String fingerprint = thaumcraftCompatibleResourceFingerprint((Map<?, ?>) input);
+            if (fingerprint.length() > 0) fingerprints.add(fingerprint);
+        }
+        Collections.sort(fingerprints);
+        return "compatible:" + type + ":" + outputKey + ":" + join(fingerprints, ",");
+    }
+
+    private String thaumcraftCompatibleResourceFingerprint(Map<?, ?> resource) {
+        String aspectTag = thaumcraftAspectTag(resource);
+        Object rawAmount = resource.get("amount");
+        long amount = rawAmount instanceof Number ? ((Number) rawAmount).longValue() : 1L;
+        if (aspectTag.length() > 0) return "aspect:" + aspectTag + "x" + amount;
+        String registryKey = resourceRegistryKey(resource);
+        if (registryKey.length() == 0) return "";
+        String nbt = safeString(resource.get("nbt"));
+        return safeString(resource.get("kind"))
+            + ":"
+            + registryKey
+            + (nbt.length() == 0 ? "" : "#" + nbt)
+            + "x"
+            + amount;
+    }
+
+    private String thaumcraftAspectTag(Map<?, ?> resource) {
+        if ("aspect".equals(safeString(resource.get("kind")))) {
+            String tag = safeString(resource.get("tag"));
+            if (tag.length() > 0) return tag.toLowerCase(Locale.ROOT);
+            String id = safeString(resource.get("id"));
+            int separator = id.lastIndexOf(':');
+            return (separator >= 0 ? id.substring(separator + 1) : id).toLowerCase(Locale.ROOT);
+        }
+        String registryKey = resourceRegistryKey(resource);
+        if (!"aspectrecipeindex:aspect".equals(registryKey)) return "";
+        String nbt = safeString(resource.get("nbt"));
+        String marker = "Aspect:\"";
+        int start = nbt.indexOf(marker);
+        if (start < 0) return "";
+        start += marker.length();
+        int end = nbt.indexOf('\"', start);
+        return end > start ? nbt.substring(start, end).toLowerCase(Locale.ROOT) : "";
+    }
+
+    private String resourceRegistryKey(Map<?, ?> resource) {
+        if (resource == null) return "";
+        String registryId = safeString(resource.get("registryId"));
+        if (registryId.length() > 0) return registryId.toLowerCase(Locale.ROOT);
+        String id = safeString(resource.get("id")).toLowerCase(Locale.ROOT);
+        int metaSeparator = id.lastIndexOf('@');
+        if (metaSeparator > 0 && id.substring(metaSeparator + 1).matches("\\d+")) {
+            return id.substring(0, metaSeparator);
+        }
+        return id;
     }
 
     private String thaumcraftNeiLayoutSignature(String type, Map<String, Object> output, List<Map<String, Object>> slots) {

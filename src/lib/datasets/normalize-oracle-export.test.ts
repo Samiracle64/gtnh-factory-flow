@@ -80,6 +80,92 @@ describe("normalize-oracle-export", () => {
       expect.objectContaining({ adapter: "cropsnh-crops", id: "cropsnh-live-registry" }),
     );
   });
+
+  it("keeps Thaumcraft recipe semantics while applying an exported NEI layout", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "gtnh-normalizer-"));
+    temporaryDirectories.push(root);
+    const inputPath = path.join(root, "oracle.json");
+    const outputPath = path.join(root, "recipes.json");
+    await fs.writeFile(
+      inputPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        format: "dev.gtnhplanner.oracle.v1",
+        adapters: [],
+        domains: [
+          { id: "oreDictionary", entries: {} },
+          {
+            id: "thaumcraft",
+            recipes: [
+              {
+                id: "alchemy-layout",
+                type: "crucible",
+                className: "thaumcraft.api.crafting.CrucibleRecipe",
+                output: { kind: "item", id: "thaumcraft:test_output", amount: 1 },
+                catalyst: { kind: "item", id: "thaumcraft:test_catalyst", amount: 1 },
+                aspects: [{ kind: "aspect", id: "thaumcraft:aspect:aer", amount: 8 }],
+                neiLayout: {
+                  source: "gtnh-nei-handler",
+                  handlerClass: "com.gtnewhorizons.aspectrecipeindex.nei.AlchemyRecipeHandler",
+                  backgroundImage: "/datasets/gtnh/stable-test/textures/nei-layouts/alchemy.png",
+                  canvas: { width: 170, height: 132 },
+                  slots: [
+                    {
+                      side: "output",
+                      slotIndex: 0,
+                      x: 75,
+                      y: 5,
+                      resource: { kind: "item", id: "thaumcraft:test_output", amount: 1 },
+                    },
+                    {
+                      side: "input",
+                      slotIndex: 0,
+                      x: 54,
+                      y: 27,
+                      resource: { kind: "item", id: "thaumcraft:test_catalyst", amount: 1 },
+                    },
+                    {
+                      side: "input",
+                      slotIndex: 1,
+                      x: 64,
+                      y: 76,
+                      resource: {
+                        kind: "item",
+                        id: "aspectrecipeindex:aspect@1",
+                        amount: 8,
+                        nbt: '{Aspect:"aer"}',
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const result = runNormalizer(inputPath, outputPath, false);
+    expect(result.status, result.stderr).toBe(0);
+    const dataset = JSON.parse(await fs.readFile(outputPath, "utf8"));
+    expect(dataset.recipes).toHaveLength(1);
+    expect(dataset.recipes[0].inputs).toEqual([
+      expect.objectContaining({ id: "thaumcraft:test_catalyst", neiSlot: { x: 54, y: 27 } }),
+      expect.objectContaining({
+        kind: "aspect",
+        id: "thaumcraft:aspect:aer",
+        neiSlot: { x: 64, y: 76 },
+      }),
+    ]);
+    expect(dataset.recipes[0].inputs).not.toContainEqual(
+      expect.objectContaining({ id: "aspectrecipeindex:aspect@1" }),
+    );
+    expect(dataset.recipes[0].nei).toMatchObject({
+      source: "gtnh-nei-handler",
+      handlerClass: "com.gtnewhorizons.aspectrecipeindex.nei.AlchemyRecipeHandler",
+      backgroundImage: "/datasets/gtnh/stable-test/textures/nei-layouts/alchemy.png",
+    });
+  });
 });
 
 async function normalize(root: string, rawRecipeId: string, name: string) {

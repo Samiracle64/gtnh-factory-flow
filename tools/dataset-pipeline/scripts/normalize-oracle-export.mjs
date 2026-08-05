@@ -510,10 +510,6 @@ function normalizeThaumcraft(domain) {
 
 function normalizeThaumcraftRecipe(rawRecipe) {
   const exportedLayout = normalizeExportedNeiLayout(rawRecipe.neiLayout);
-  if (exportedLayout) {
-    return exportedLayout;
-  }
-
   const type = text(rawRecipe.type, "thaumcraft");
   const inputs = [];
   const slots = [];
@@ -562,12 +558,15 @@ function normalizeThaumcraftRecipe(rawRecipe) {
       }),
     );
     progressBars.push({ x: 72, y: 35, width: 24, height: 17, direction: "right" });
-    return {
-      output: outputs[0],
-      outputs,
-      inputs,
-      nei: { slots, progressBars },
-    };
+    return mergeExportedNeiLayout(
+      {
+        output: outputs[0],
+        outputs,
+        inputs,
+        nei: { slots, progressBars },
+      },
+      exportedLayout,
+    );
   } else if (type === "infusion") {
     addInput(rawRecipe.centralInput ?? rawRecipe.catalyst, { x: 75, y: 58 }, 0);
     const componentSlots = thaumcraftInfusionComponentSlots((rawRecipe.components ?? []).length);
@@ -603,18 +602,21 @@ function normalizeThaumcraftRecipe(rawRecipe) {
     );
   }
 
-  return {
-    output,
-    outputs: output ? [output] : [],
-    inputs,
-    nei:
-      slots.length > 0
-        ? {
-            slots,
-            progressBars,
-          }
-        : undefined,
-  };
+  return mergeExportedNeiLayout(
+    {
+      output,
+      outputs: output ? [output] : [],
+      inputs,
+      nei:
+        slots.length > 0
+          ? {
+              slots,
+              progressBars,
+            }
+          : undefined,
+    },
+    exportedLayout,
+  );
 }
 
 function normalizeExportedNeiLayout(rawLayout) {
@@ -661,6 +663,7 @@ function normalizeExportedNeiLayout(rawLayout) {
 
   return {
     output: outputs[0],
+    outputs,
     inputs,
     nei: {
       source: text(rawLayout.source, "gtnh-nei-handler"),
@@ -669,6 +672,50 @@ function normalizeExportedNeiLayout(rawLayout) {
       canvas,
       slots,
       progressBars: [],
+    },
+  };
+}
+
+function mergeExportedNeiLayout(semanticRecipe, exportedLayout) {
+  if (!exportedLayout) {
+    return semanticRecipe;
+  }
+
+  const semanticOutputs = semanticRecipe.outputs?.length
+    ? semanticRecipe.outputs
+    : semanticRecipe.output
+      ? [semanticRecipe.output]
+      : [];
+  const outputs = semanticOutputs.length > 0 ? semanticOutputs : (exportedLayout.outputs ?? []);
+  const inputs = semanticRecipe.inputs?.length
+    ? semanticRecipe.inputs
+    : (exportedLayout.inputs ?? []);
+  const exportedInputSlots = (exportedLayout.nei?.slots ?? []).filter(
+    (slot) => slot.side === "input",
+  );
+  const exportedOutputSlots = (exportedLayout.nei?.slots ?? []).filter(
+    (slot) => slot.side === "output",
+  );
+  const positionResources = (resources, slots) =>
+    resources.map((resource, index) => {
+      const slot = slots[index];
+      return slot
+        ? {
+            ...resource,
+            neiSlot: { x: slot.x, y: slot.y },
+          }
+        : resource;
+    });
+  const positionedInputs = positionResources(inputs, exportedInputSlots);
+  const positionedOutputs = positionResources(outputs, exportedOutputSlots);
+
+  return {
+    output: positionedOutputs[0],
+    outputs: positionedOutputs,
+    inputs: positionedInputs,
+    nei: {
+      ...(semanticRecipe.nei ?? {}),
+      ...exportedLayout.nei,
     },
   };
 }
