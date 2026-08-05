@@ -663,41 +663,40 @@ public final class GtnhCalcOracleExporter {
             return layoutsBySignature;
         }
 
-        String[][] handlers = new String[][] {
-            { "infusion", "ru.timeconqueror.tcneiadditions.nei.TCNAInfusionRecipeHandler" },
-            { "crucible", "ru.timeconqueror.tcneiadditions.nei.TCNACrucibleRecipeHandler" },
-            { "arcane", "ru.timeconqueror.tcneiadditions.nei.arcaneworkbench.ArcaneCraftingShapedHandler" },
-            { "arcane", "ru.timeconqueror.tcneiadditions.nei.arcaneworkbench.ArcaneCraftingShapelessHandler" },
-            { "infusion", "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.InfusionRecipeHandler" },
-            { "crucible", "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.CrucibleRecipeHandler" },
-            { "arcane", "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.ArcaneShapedRecipeHandler" },
-            { "arcane", "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.ArcaneShapelessRecipeHandler" }
-        };
-
         int exported = 0;
         List<String> warnings = new ArrayList<String>();
-        for (String[] handlerInfo : handlers) {
-            String type = handlerInfo[0];
-            String className = handlerInfo[1];
-            if (!isClassPresent(className)) {
-                continue;
-            }
+        List<Object> handlerPrototypes = registeredThaumcraftNeiHandlers(warnings);
+        for (Object prototype : handlerPrototypes) {
+            String className = prototype.getClass().getName();
+            String type = thaumcraftNeiHandlerType(prototype);
+            if (type == null) continue;
             try {
-                Object handler = Class.forName(className).getConstructor().newInstance();
+                Object handler = invokeBest(prototype, "getAllRecipeHandler", new Object[0]);
+                if (handler == null) {
+                    handler = prototype.getClass().getConstructor().newInstance();
+                }
                 Object overlay = invokeBest(handler, "getOverlayIdentifier", new Object[0]);
-                if (overlay == null) {
-                    continue;
+                Object handlerId = invokeBest(handler, "getHandlerId", new Object[0]);
+                String identifier = safeString(overlay);
+                if (identifier.length() == 0) {
+                    identifier = safeString(handlerId);
+                }
+                if (identifier.length() == 0) {
+                    identifier = className;
                 }
                 String recipeName = safeString(invokeBest(handler, "getRecipeName", new Object[0]));
-                invokeBest(handler, "loadCraftingRecipes", new Object[] { safeString(overlay), new Object[0] });
                 List<?> cachedRecipes = listField(handler, "arecipes");
+                if (cachedRecipes.isEmpty() && overlay != null) {
+                    invokeBest(handler, "loadCraftingRecipes", new Object[] { safeString(overlay), new Object[0] });
+                    cachedRecipes = listField(handler, "arecipes");
+                }
                 int index = 0;
                 for (Object cachedRecipe : cachedRecipes) {
                     Map<String, Object> layout = thaumcraftNeiLayout(
                         handler,
                         type,
                         className,
-                        safeString(overlay),
+                        identifier,
                         recipeName,
                         index,
                         cachedRecipe
@@ -717,6 +716,9 @@ public final class GtnhCalcOracleExporter {
                     }
                     exported++;
                 }
+                if (cachedRecipes.isEmpty()) {
+                    warnings.add(className + ": registered handler returned no recipes");
+                }
             } catch (Throwable t) {
                 warnings.add(className + ": " + t.toString());
             }
@@ -725,15 +727,80 @@ public final class GtnhCalcOracleExporter {
         adapters.add(
             adapter(
                 "thaumcraft-nei-layouts",
-                warnings.isEmpty() ? "computed" : "partial",
+                exported > 0 && warnings.isEmpty() ? "computed" : "partial",
                 true,
-                handlers.length,
+                handlerPrototypes.size(),
                 exported,
                 started,
-                warnings.isEmpty() ? null : join(warnings, "; ")
+                warnings.isEmpty() && exported == 0
+                    ? "No registered Thaumcraft NEI handler exposed recipes."
+                    : (warnings.isEmpty() ? null : join(warnings, "; "))
             )
         );
         return layoutsBySignature;
+    }
+
+    private List<Object> registeredThaumcraftNeiHandlers(List<String> warnings) {
+        List<Object> handlers = new ArrayList<Object>();
+        Set<String> seen = Collections.newSetFromMap(new LinkedHashMap<String, Boolean>());
+        try {
+            Class<?> registry = Class.forName("codechicken.nei.recipe.GuiCraftingRecipe");
+            for (String fieldName : new String[] { "craftinghandlers", "serialCraftingHandlers" }) {
+                Object registered = readStaticField(registry, fieldName);
+                for (Object handler : iterable(registered)) {
+                    if (handler == null || thaumcraftNeiHandlerType(handler) == null) continue;
+                    if (seen.add(handler.getClass().getName())) {
+                        handlers.add(handler);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            warnings.add("NEI crafting handler registry: " + t.toString());
+        }
+
+        if (!handlers.isEmpty()) {
+            return handlers;
+        }
+
+        String[] legacyHandlers = new String[] {
+            "ru.timeconqueror.tcneiadditions.nei.TCNAInfusionRecipeHandler",
+            "ru.timeconqueror.tcneiadditions.nei.TCNACrucibleRecipeHandler",
+            "ru.timeconqueror.tcneiadditions.nei.arcaneworkbench.ArcaneCraftingShapedHandler",
+            "ru.timeconqueror.tcneiadditions.nei.arcaneworkbench.ArcaneCraftingShapelessHandler",
+            "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.InfusionRecipeHandler",
+            "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.CrucibleRecipeHandler",
+            "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.ArcaneShapedRecipeHandler",
+            "com.djgiannuzz.thaumcraftneiplugin.nei.recipehandler.ArcaneShapelessRecipeHandler"
+        };
+        for (String className : legacyHandlers) {
+            if (!isClassPresent(className)) continue;
+            try {
+                handlers.add(Class.forName(className).getConstructor().newInstance());
+            } catch (Throwable t) {
+                warnings.add(className + ": " + t.toString());
+            }
+        }
+        return handlers;
+    }
+
+    private String thaumcraftNeiHandlerType(Object handler) {
+        if (handler == null) return null;
+        String className = handler.getClass().getName();
+        String lowerClassName = className.toLowerCase(Locale.ROOT);
+        if (!lowerClassName.contains("thaum") && !lowerClassName.contains("tcnei")) return null;
+        String fingerprint = (
+            className
+                + " "
+                + safeString(invokeBest(handler, "getHandlerId", new Object[0]))
+                + " "
+                + safeString(invokeBest(handler, "getOverlayIdentifier", new Object[0]))
+                + " "
+                + safeString(invokeBest(handler, "getRecipeName", new Object[0]))
+        ).toLowerCase(Locale.ROOT);
+        if (fingerprint.contains("infusion")) return "infusion";
+        if (fingerprint.contains("crucible")) return "crucible";
+        if (fingerprint.contains("arcane")) return "arcane";
+        return null;
     }
 
     private Map<String, Object> thaumcraftNeiLayout(
@@ -1054,12 +1121,48 @@ public final class GtnhCalcOracleExporter {
         long started = System.currentTimeMillis();
         Map<String, Object> domain = domain("ic2Crops");
         List<Map<String, Object>> crops = new ArrayList<Map<String, Object>>();
-        boolean present = isClassPresent("ic2.api.crops.Crops") || GtnhCalcOracleMod.isModLoaded("IC2");
+        boolean cropsNhPresent = isClassPresent("com.gtnewhorizon.cropsnh.farming.registries.CropRegistry")
+            || GtnhCalcOracleMod.isModLoaded("cropsnh");
+        boolean present = cropsNhPresent
+            || isClassPresent("ic2.api.crops.Crops")
+            || GtnhCalcOracleMod.isModLoaded("IC2");
 
         if (!present) {
             adapters.add(adapter("ic2-crop-cards", "not_present", false, 0, 0, started, null));
             domain.put("crops", crops);
             return domain;
+        }
+
+        if (cropsNhPresent) {
+            try {
+                Class<?> registryClass = Class.forName("com.gtnewhorizon.cropsnh.farming.registries.CropRegistry");
+                Object registry = readStaticField(registryClass, "instance");
+                Object registered = invokeBest(registry, "getAllInRegistrationOrder", new Object[0]);
+                int registeredCount = 0;
+                int visibleCount = 0;
+                for (Object crop : iterable(registered)) {
+                    registeredCount++;
+                    Object hidden = invokeBest(crop, "hideFromNEI", new Object[0]);
+                    if (hidden instanceof Boolean && ((Boolean) hidden).booleanValue()) continue;
+                    visibleCount++;
+                    Map<String, Object> exported = cropsNhCropCard(crop);
+                    if (exported != null) crops.add(exported);
+                }
+                domain.put("crops", crops);
+                String status = !crops.isEmpty() && crops.size() == visibleCount ? "computed" : "partial";
+                String warning = "computed".equals(status)
+                    ? null
+                    : "CropsNH registered " + visibleCount + " visible crop cards, but only " + crops.size()
+                        + " produced complete seed, drop, and duration variants.";
+                adapters.add(
+                    adapter("cropsnh-crop-cards", status, true, registeredCount, crops.size(), started, warning)
+                );
+                return domain;
+            } catch (Throwable t) {
+                domain.put("crops", crops);
+                adapters.add(adapter("cropsnh-crop-cards", "partial", true, 0, 0, started, t.toString()));
+                return domain;
+            }
         }
 
         try {
@@ -1087,6 +1190,157 @@ public final class GtnhCalcOracleExporter {
         }
 
         return domain;
+    }
+
+    private Map<String, Object> cropsNhCropCard(Object crop) {
+        if (crop == null) return null;
+        String fullId = firstString(crop, "getId");
+        if (fullId == null || fullId.length() == 0) return null;
+
+        String owner = "cropsnh";
+        String cropId = fullId;
+        int separator = fullId.indexOf(':');
+        if (separator > 0 && separator < fullId.length() - 1) {
+            owner = fullId.substring(0, separator);
+            cropId = fullId.substring(separator + 1);
+        }
+
+        String unlocalizedName = firstString(crop, "getUnlocalizedName");
+        String name = unlocalizedName == null ? cropId : StatCollector.translateToLocal(unlocalizedName);
+        List<Map<String, Object>> variants = cropsNhVariants(crop);
+        if (variants.isEmpty()) return null;
+
+        Map<String, Object> exported = map();
+        exported.put("className", crop.getClass().getName());
+        exported.put("id", cropId);
+        exported.put("owner", owner);
+        exported.put("name", name);
+        putIfPresent(exported, "tier", firstNumber(crop, "getTier"));
+        putIfPresent(exported, "creator", firstString(crop, "getCreator"));
+        exported.put("harvestable", Boolean.TRUE);
+        putIfPresent(exported, "variants", variants);
+        putIfPresent(exported, "seed", variants.get(0).get("seed"));
+        putIfPresent(exported, "displayItem", variants.get(0).get("seed"));
+        putIfPresent(exported, "drops", variants.get(0).get("drops"));
+        putIfPresent(exported, "durationTicks", variants.get(0).get("durationTicks"));
+        exported.put(
+            "notes",
+            "CropsNH drops, stat seeds, and fully-supported crop-stick durations exported from the live CropsNH registry."
+        );
+        return exported;
+    }
+
+    private List<Map<String, Object>> cropsNhVariants(Object crop) {
+        List<Map<String, Object>> variants = new ArrayList<Map<String, Object>>();
+        addCropsNhVariant(variants, crop, "23-31-1", "23/31/1 in supported crop sticks", 23, 31, 1);
+        addCropsNhVariant(variants, crop, "31-31-31", "Perfect stats 31/31/31", 31, 31, 31);
+        addCropsNhVariant(variants, crop, "1-1-1", "Low stats 1/1/1", 1, 1, 1);
+        return variants;
+    }
+
+    private void addCropsNhVariant(
+        List<Map<String, Object>> variants,
+        Object crop,
+        String key,
+        String label,
+        int growth,
+        int gain,
+        int resistance
+    ) {
+        Object seedStats = cropsNhSeedStats(growth, gain, resistance);
+        Object rawSeed = seedStats == null
+            ? null
+            : invokeBest(crop, "getSeedItem", new Object[] { seedStats });
+        Map<String, Object> seed = itemStack(rawSeed instanceof ItemStack ? (ItemStack) rawSeed : null);
+        List<Map<String, Object>> drops = cropsNhDrops(crop, gain);
+        Integer durationTicks = cropsNhDurationTicks(crop, growth);
+        if (seed == null || drops.isEmpty() || durationTicks == null) return;
+
+        Map<String, Object> variant = map();
+        variant.put("id", key);
+        variant.put("label", label);
+        variant.put("growth", Integer.valueOf(growth));
+        variant.put("gain", Integer.valueOf(gain));
+        variant.put("resistance", Integer.valueOf(resistance));
+        variant.put("environmentAssumption", "maximum-supported-crop-stick-environment");
+        variant.put("seed", seed);
+        variant.put("drops", drops);
+        variant.put("durationTicks", durationTicks);
+        variants.add(variant);
+    }
+
+    private Object cropsNhSeedStats(int growth, int gain, int resistance) {
+        try {
+            Class<?> seedStatsClass = Class.forName("com.gtnewhorizon.cropsnh.farming.SeedStats");
+            return seedStatsClass.getConstructor(Byte.TYPE, Byte.TYPE, Byte.TYPE, Boolean.TYPE).newInstance(
+                Byte.valueOf((byte) growth),
+                Byte.valueOf((byte) gain),
+                Byte.valueOf((byte) resistance),
+                Boolean.TRUE
+            );
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private List<Map<String, Object>> cropsNhDrops(Object crop, int gain) {
+        List<Map<String, Object>> drops = new ArrayList<Map<String, Object>>();
+        Object rawDropTable = invokeBest(crop, "getDropTable", new Object[0]);
+        if (!(rawDropTable instanceof Map)) return drops;
+
+        Number rawDropChance = asNumber(invokeBest(crop, "getDropChance", new Object[0]));
+        if (rawDropChance == null) return drops;
+        double averageRounds = rawDropChance.doubleValue() * Math.pow(1.03D, gain);
+        double averageGainBonus = (gain + 1) / 100.0D;
+
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) rawDropTable).entrySet()) {
+            if (!(entry.getKey() instanceof ItemStack)) continue;
+            Number chance = asNumber(entry.getValue());
+            if (chance == null || chance.doubleValue() <= 0.0D) continue;
+            ItemStack stack = ((ItemStack) entry.getKey()).copy();
+            Map<String, Object> resource = itemStack(stack);
+            if (resource == null) continue;
+            double amountPerSuccessfulDrop = (stack.stackSize + averageGainBonus) * averageRounds;
+            if (!(amountPerSuccessfulDrop > 0.0D)) continue;
+            resource.put("amount", Double.valueOf(round(amountPerSuccessfulDrop, 6)));
+            Map<String, Object> drop = map();
+            drop.put("resource", resource);
+            drop.put("chance", Double.valueOf(round(chance.doubleValue() / 10000.0D, 6)));
+            drops.add(drop);
+        }
+        return drops;
+    }
+
+    private Integer cropsNhDurationTicks(Object crop, int growth) {
+        try {
+            Class<?> cropSticks = Class.forName("com.gtnewhorizon.cropsnh.tileentity.TileEntityCropSticks");
+            int maximumNutrients = readStaticInt(cropSticks.getName(), "MAX_NUTRIENT_SCORE", -1);
+            int tickRate = readStaticInt(cropSticks.getName(), "TICK_RATE", -1);
+            Number tier = firstNumber(crop, "getTier");
+            Number growthDuration = firstNumber(crop, "getGrowthDuration");
+            if (maximumNutrients < 0 || tickRate <= 0 || tier == null || growthDuration == null) return null;
+            Number growthRate = asNumber(
+                invokeStaticBest(
+                    cropSticks,
+                    "getGrowthRate",
+                    new Object[] {
+                        Integer.valueOf(maximumNutrients),
+                        Integer.valueOf(tier.intValue()),
+                        Integer.valueOf(growth)
+                    }
+                )
+            );
+            Number multiplier = asNumber(
+                readStaticField(Class.forName("com.gtnewhorizon.cropsnh.handler.ConfigurationHandler"), "growthMultiplier")
+            );
+            double effectiveRate = growthRate == null ? 0.0D : growthRate.doubleValue();
+            effectiveRate *= multiplier == null ? 1.0D : multiplier.doubleValue();
+            if (!(effectiveRate > 0.0D)) return null;
+            int growthCycles = Math.max(1, (int) Math.ceil(growthDuration.doubleValue() / effectiveRate));
+            return Integer.valueOf(growthCycles * tickRate);
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private Map<String, Object> thaumcraftRecipe(String sourceList, int index, Object rawRecipe) {
@@ -2451,6 +2705,23 @@ public final class GtnhCalcOracleExporter {
             try {
                 method.setAccessible(true);
                 return method.invoke(target, args);
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private Object invokeStaticBest(Class<?> type, String methodName, Object[] args) {
+        if (type == null || methodName == null) return null;
+        for (Method method : type.getMethods()) {
+            if (!Modifier.isStatic(method.getModifiers())
+                || !method.getName().equals(methodName)
+                || method.getParameterTypes().length != args.length) {
+                continue;
+            }
+            try {
+                method.setAccessible(true);
+                return method.invoke(null, args);
             } catch (Throwable ignored) {
             }
         }

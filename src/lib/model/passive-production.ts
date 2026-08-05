@@ -273,7 +273,11 @@ function cropProductionControls(recipe: Recipe): MachineConfigControl[] {
       id: CROP_STATS_CONTROL_ID,
       label: "Crop Stats",
       minimumKey: tiers[0]?.key ?? "1-1-1",
-      defaultKey: tiers.some((tier) => tier.key === "23-31-0") ? "23-31-0" : tiers[0]?.key,
+      defaultKey: tiers.some((tier) => tier.key === "23-31-0")
+        ? "23-31-0"
+        : tiers.some((tier) => tier.key === "23-31-1")
+          ? "23-31-1"
+          : tiers[0]?.key,
       tiers,
     },
   ];

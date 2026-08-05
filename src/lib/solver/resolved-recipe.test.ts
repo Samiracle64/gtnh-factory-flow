@@ -12,7 +12,17 @@ describe("resolveNodeRecipe", () => {
       minimumTier: "NONE",
       durationTicks: 8704,
       eut: 0,
-      inputs: [{ kind: "item", id: "ic2:itemcropseed#nbt-abc", amount: 1, consumed: false }],
+      inputs: [
+        {
+          kind: "item",
+          id: "ic2:itemcropseed#nbt-abc",
+          amount: 1,
+          consumed: false,
+          displayName: "Stickreed Seeds",
+          iconPath: "/seed.png",
+          tooltip: ["NBT: {growth:23}", "Crop: Stickreed"],
+        },
+      ],
       outputs: [{ kind: "item", id: "ic2:itemharz", amount: 2.740621 }],
       machineConfigControls: [
         {
@@ -42,6 +52,9 @@ describe("resolveNodeRecipe", () => {
             machineConfigTiers: { cropStats: "1-1-1" },
             durationTicks: 8704,
             eut: 0,
+            inputs: [
+              { kind: "item", id: "ic2:itemcropseed#nbt-low", amount: 1 },
+            ],
             outputs: [{ kind: "item", id: "ic2:itemharz", amount: 0.865619 }],
           },
         ],
@@ -66,6 +79,13 @@ describe("resolveNodeRecipe", () => {
 
     expect(resolved.runtimeVariant?.id).toBe("1-1-1");
     expect(resolved.recipe.durationTicks).toBe(8704);
+    expect(resolved.recipe.inputs[0]).toMatchObject({
+      id: "ic2:itemcropseed#nbt-low",
+      displayName: "Stickreed Seeds",
+      iconPath: "/seed.png",
+      consumed: false,
+      tooltip: ["Crop: Stickreed"],
+    });
     expect(resolved.recipe.outputs[0]?.amount).toBe(0.865619);
   });
 });

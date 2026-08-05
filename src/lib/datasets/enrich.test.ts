@@ -228,9 +228,9 @@ describe("enrichDatasetRecipes", () => {
               outputs: [{ kind: "item", id: "IC2:itemHarz", amount: 0.865619 }],
             },
             {
-              id: "23-31-0",
-              label: "23/31/0",
-              machineConfigTiers: { cropStats: "23-31-0" },
+              id: "23-31-1",
+              label: "23/31/1",
+              machineConfigTiers: { cropStats: "23-31-1" },
               durationTicks: 8704,
               eut: 0,
               outputs: [{ kind: "item", id: "IC2:itemHarz", amount: 2.740621 }],
@@ -260,8 +260,8 @@ describe("enrichDatasetRecipes", () => {
     });
     expect(recipe?.machineHandlers).toEqual([]);
     expect(recipe?.inputs[0]?.tooltip).toEqual(["Not a generated line"]);
-    expect(statControl?.defaultKey).toBe("23-31-0");
-    expect(statControl?.tiers.map((tier) => tier.label)).toEqual(["1/1/1", "23/31/0", "31/31/31"]);
+    expect(statControl?.defaultKey).toBe("23-31-1");
+    expect(statControl?.tiers.map((tier) => tier.label)).toEqual(["1/1/1", "23/31/1", "31/31/31"]);
     expect(statControl?.tiers.every((tier) => tier.outputMultiplier === undefined)).toBe(true);
     expect(recipe?.machineConfigControls?.map((control) => control.id)).toEqual(["cropStats"]);
   });

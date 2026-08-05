@@ -817,9 +817,27 @@ function normalizeForestryBees(domain) {
 
 function normalizeIc2Crops(domain) {
   const machineType = "IC2 Crop";
+  const cropsNhLoaded = (raw.loadedMods ?? []).some(
+    (modId) => String(modId).toLowerCase() === "cropsnh",
+  );
+  const cropsNhAdapter = (raw.adapters ?? []).find(
+    (adapter) => adapter.id === "cropsnh-crop-cards",
+  );
+  if (
+    cropsNhLoaded &&
+    (cropsNhAdapter?.status !== "computed" || !(cropsNhAdapter.recipeCount > 0))
+  ) {
+    normalizationFailures.push({
+      adapter: "cropsnh-crops",
+      id: "cropsnh-live-registry",
+      reason:
+        "CropsNH is loaded, but the authoritative CropsNH crop registry was not exported successfully.",
+    });
+  }
   for (const crop of domain?.crops ?? []) {
     const baseVariant =
       (crop.variants ?? []).find((variant) => variant.id === "23-31-0") ??
+      (crop.variants ?? []).find((variant) => variant.id === "23-31-1") ??
       (crop.variants ?? []).find((variant) => variant.id === "31-31-31") ??
       (crop.variants ?? [])[0] ??
       crop;
@@ -1000,6 +1018,13 @@ function cropRuntimeVariants(crop, fallbackOutputs, fallbackDurationTicks) {
       if (outputs.length === 0) {
         return undefined;
       }
+      const seed = resourceAmount(variant.seed, {
+        consumed: false,
+        defaultAmount: 1,
+      });
+      if (seed) {
+        addResource(seed);
+      }
       return {
         id: text(variant.id, "base"),
         label: text(variant.label, variant.id ?? "Crop stats"),
@@ -1008,6 +1033,7 @@ function cropRuntimeVariants(crop, fallbackOutputs, fallbackDurationTicks) {
         },
         durationTicks: positiveInt(variant.durationTicks, fallbackDurationTicks),
         eut: 0,
+        inputs: seed ? runtimeResources([seed]) : undefined,
         outputs: runtimeResources(outputs),
       };
     })

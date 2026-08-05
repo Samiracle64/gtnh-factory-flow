@@ -5,6 +5,7 @@ import type {
   Recipe,
   RecipeInput,
   RecipeOutput,
+  RuntimeCalculationResource,
   RuntimeCalculationVariant,
 } from "@/lib/model/types";
 
@@ -69,9 +70,10 @@ export function getRuntimeCalculationInputs(
   }
 
   return variant.inputs.map((runtimeInput) => {
-    const existing = recipe.inputs.find(
+    const exact = recipe.inputs.find(
       (input) => input.kind === runtimeInput.kind && input.id === runtimeInput.id,
     );
+    const existing = exact ?? singleInputTemplate(recipe.inputs, runtimeInput.kind);
     return {
       ...existing,
       kind: runtimeInput.kind,
@@ -82,13 +84,19 @@ export function getRuntimeCalculationInputs(
       iconAtlas: existing?.iconAtlas,
       dominantColor: existing?.dominantColor,
       modId: existing?.modId,
-      tooltip: existing?.tooltip,
+      tooltip: exact
+        ? existing?.tooltip
+        : existing?.tooltip?.filter((line) => !line.startsWith("NBT:")),
       neiSlot: existing?.neiSlot,
       alternatives: existing?.alternatives,
       optional: existing?.optional,
       consumed: existing?.consumed,
     };
   });
+}
+
+function singleInputTemplate(inputs: RecipeInput[], kind: RuntimeCalculationResource["kind"]) {
+  return inputs.length === 1 && inputs[0]?.kind === kind ? inputs[0] : undefined;
 }
 
 export function runtimeCalculationWarning(
