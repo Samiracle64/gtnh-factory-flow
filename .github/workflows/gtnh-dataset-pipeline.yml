@@ -317,8 +317,8 @@ jobs:
 
   deploy:
     name: Deploy site to exotiserver
-    needs: publish
-    if: ${{ always() && needs.publish.result == 'success' }}
+    needs: [detect, publish]
+    if: ${{ always() && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.publish == true && needs.detect.outputs.has_versions != 'true')) }}
     runs-on: [self-hosted, Linux, X64, gtnh-export]
     steps:
       - uses: actions/checkout@v6
