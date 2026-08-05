@@ -1,5 +1,6 @@
 package dev.gtnhplanner.calcoracle.nei;
 
+import dev.gtnhplanner.calcoracle.ClientRenderTaskQueue;
 import dev.gtnhplanner.calcoracle.GtnhCalcOracleMod;
 import net.minecraft.client.shader.Framebuffer;
 import org.lwjgl.BufferUtils;
@@ -11,15 +12,20 @@ import java.io.File;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.Callable;
 
 public final class ClientNeiLayoutBackgroundRenderer {
+
+    private static final Map<String, String> CAPTURES_BY_CATEGORY = new LinkedHashMap<String, String>();
 
     private ClientNeiLayoutBackgroundRenderer() {}
 
     public static String capture(
-        Object handler,
-        int recipeIndex,
-        String type,
+        final Object handler,
+        final int recipeIndex,
+        final String type,
         String signature,
         int width,
         int height
@@ -29,12 +35,69 @@ public final class ClientNeiLayoutBackgroundRenderer {
             return null;
         }
 
-        String fileName = "nei-" + safeName(type) + "-" + sha1(signature).substring(0, 12) + ".png";
+        final int captureWidth = Math.max(1, width);
+        final int captureHeight = Math.max(1, height);
+        String categoryKey = handler.getClass().getName()
+            + ":" + String.valueOf(type)
+            + ":" + captureWidth
+            + "x" + captureHeight;
+        String cached = CAPTURES_BY_CATEGORY.get(categoryKey);
+        if (cached != null) {
+            return cached.length() == 0 ? null : cached;
+        }
+
+        String fileName = "nei-" + safeName(type) + "-" + sha1(categoryKey).substring(0, 12) + ".png";
         File dir = new File(outputDir);
         if (!dir.isDirectory() && !dir.mkdirs()) {
+            CAPTURES_BY_CATEGORY.put(categoryKey, "");
             return null;
         }
-        File output = new File(dir, fileName);
+        final File output = new File(dir, fileName);
+        final String captureSignature = signature;
+        String datasetVersionId = System.getProperty("gtnh.oracle.datasetVersionId", "");
+        final String datasetPath = datasetVersionId.length() == 0
+            ? output.getAbsolutePath()
+            : "/datasets/gtnh/" + datasetVersionId + "/textures/nei-layouts/" + fileName;
+
+        if (output.isFile()) {
+            CAPTURES_BY_CATEGORY.put(categoryKey, datasetPath);
+            return datasetPath;
+        }
+
+        try {
+            Boolean captured = ClientRenderTaskQueue.call(new Callable<Boolean>() {
+                @Override
+                public Boolean call() {
+                    return Boolean.valueOf(
+                        captureOnClientThread(
+                            handler,
+                            recipeIndex,
+                            captureSignature,
+                            captureWidth,
+                            captureHeight,
+                            output
+                        )
+                    );
+                }
+            });
+            String result = captured.booleanValue() ? datasetPath : "";
+            CAPTURES_BY_CATEGORY.put(categoryKey, result);
+            return result.length() == 0 ? null : result;
+        } catch (Throwable t) {
+            CAPTURES_BY_CATEGORY.put(categoryKey, "");
+            GtnhCalcOracleMod.LOG.warn("Could not schedule NEI handler background for {}.", signature, t);
+            return null;
+        }
+    }
+
+    private static boolean captureOnClientThread(
+        Object handler,
+        int recipeIndex,
+        String signature,
+        int width,
+        int height,
+        File output
+    ) {
 
         Framebuffer framebuffer = new Framebuffer(width, height, true);
         boolean projectionPushed = false;
@@ -59,6 +122,7 @@ public final class ClientNeiLayoutBackgroundRenderer {
             GL11.glEnable(GL11.GL_BLEND);
 
             Method drawBackground = handler.getClass().getMethod("drawBackground", Integer.TYPE);
+            drawBackground.setAccessible(true);
             drawBackground.invoke(handler, Integer.valueOf(recipeIndex));
             GL11.glFlush();
 
@@ -67,7 +131,7 @@ public final class ClientNeiLayoutBackgroundRenderer {
             ImageIO.write(imageFromRgbaBuffer(buffer, width, height), "png", output);
         } catch (Throwable t) {
             GtnhCalcOracleMod.LOG.warn("Could not render NEI handler background for {}.", signature, t);
-            return null;
+            return false;
         } finally {
             if (modelViewPushed) {
                 GL11.glMatrixMode(GL11.GL_MODELVIEW);
@@ -81,11 +145,7 @@ public final class ClientNeiLayoutBackgroundRenderer {
             framebuffer.unbindFramebuffer();
             framebuffer.deleteFramebuffer();
         }
-
-        String datasetVersionId = System.getProperty("gtnh.oracle.datasetVersionId", "");
-        return datasetVersionId.length() == 0
-            ? output.getAbsolutePath()
-            : "/datasets/gtnh/" + datasetVersionId + "/textures/nei-layouts/" + fileName;
+        return true;
     }
 
     private static BufferedImage imageFromRgbaBuffer(ByteBuffer buffer, int width, int height) {
