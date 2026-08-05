@@ -1320,9 +1320,10 @@ public final class GtnhCalcOracleExporter {
             Number growthDuration = asNumber(invokeExactNoArg(crop, "getGrowthDuration"));
             if (maximumNutrients < 0 || tickRate <= 0 || tier == null || growthDuration == null) return null;
             Number growthRate = asNumber(
-                invokeStaticBest(
+                invokeStaticExact(
                     cropSticks,
                     "getGrowthRate",
+                    new Class<?>[] { Integer.TYPE, Integer.TYPE, Integer.TYPE },
                     new Object[] {
                         Integer.valueOf(maximumNutrients),
                         Integer.valueOf(tier.intValue()),
@@ -2749,6 +2750,18 @@ public final class GtnhCalcOracleExporter {
             }
         }
         return null;
+    }
+
+    private Object invokeStaticExact(Class<?> type, String methodName, Class<?>[] parameterTypes, Object[] args) {
+        if (type == null || methodName == null) return null;
+        try {
+            Method method = type.getMethod(methodName, parameterTypes);
+            if (!Modifier.isStatic(method.getModifiers())) return null;
+            method.setAccessible(true);
+            return method.invoke(null, args);
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private String invokeString(Object target, String methodName) {
