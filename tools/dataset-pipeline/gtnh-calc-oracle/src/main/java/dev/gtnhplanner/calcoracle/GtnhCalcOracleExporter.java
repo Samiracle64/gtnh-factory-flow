@@ -1137,12 +1137,12 @@ public final class GtnhCalcOracleExporter {
             try {
                 Class<?> registryClass = Class.forName("com.gtnewhorizon.cropsnh.farming.registries.CropRegistry");
                 Object registry = readStaticField(registryClass, "instance");
-                Object registered = invokeBest(registry, "getAllInRegistrationOrder", new Object[0]);
+                Object registered = invokeExactNoArg(registry, "getAllInRegistrationOrder");
                 int registeredCount = 0;
                 int visibleCount = 0;
                 for (Object crop : iterable(registered)) {
                     registeredCount++;
-                    Object hidden = invokeBest(crop, "hideFromNEI", new Object[0]);
+                    Object hidden = invokeExactNoArg(crop, "hideFromNEI");
                     if (hidden instanceof Boolean && ((Boolean) hidden).booleanValue()) continue;
                     visibleCount++;
                     Map<String, Object> exported = cropsNhCropCard(crop);
@@ -1194,7 +1194,7 @@ public final class GtnhCalcOracleExporter {
 
     private Map<String, Object> cropsNhCropCard(Object crop) {
         if (crop == null) return null;
-        String fullId = firstString(crop, "getId");
+        String fullId = stringValue(invokeExactNoArg(crop, "getId"));
         if (fullId == null || fullId.length() == 0) return null;
 
         String owner = "cropsnh";
@@ -1205,7 +1205,7 @@ public final class GtnhCalcOracleExporter {
             cropId = fullId.substring(separator + 1);
         }
 
-        String unlocalizedName = firstString(crop, "getUnlocalizedName");
+        String unlocalizedName = stringValue(invokeExactNoArg(crop, "getUnlocalizedName"));
         String name = unlocalizedName == null ? cropId : StatCollector.translateToLocal(unlocalizedName);
         List<Map<String, Object>> variants = cropsNhVariants(crop);
         if (variants.isEmpty()) return null;
@@ -1215,8 +1215,8 @@ public final class GtnhCalcOracleExporter {
         exported.put("id", cropId);
         exported.put("owner", owner);
         exported.put("name", name);
-        putIfPresent(exported, "tier", firstNumber(crop, "getTier"));
-        putIfPresent(exported, "creator", firstString(crop, "getCreator"));
+        putIfPresent(exported, "tier", asNumber(invokeExactNoArg(crop, "getTier")));
+        putIfPresent(exported, "creator", stringValue(invokeExactNoArg(crop, "getCreator")));
         exported.put("harvestable", Boolean.TRUE);
         putIfPresent(exported, "variants", variants);
         putIfPresent(exported, "seed", variants.get(0).get("seed"));
@@ -1250,7 +1250,7 @@ public final class GtnhCalcOracleExporter {
         Object seedStats = cropsNhSeedStats(growth, gain, resistance);
         Object rawSeed = seedStats == null
             ? null
-            : invokeBest(crop, "getSeedItem", new Object[] { seedStats });
+            : invokeCropsNhSeedItem(crop, seedStats);
         Map<String, Object> seed = itemStack(rawSeed instanceof ItemStack ? (ItemStack) rawSeed : null);
         List<Map<String, Object>> drops = cropsNhDrops(crop, gain);
         Integer durationTicks = cropsNhDurationTicks(crop, growth);
@@ -1285,10 +1285,10 @@ public final class GtnhCalcOracleExporter {
 
     private List<Map<String, Object>> cropsNhDrops(Object crop, int gain) {
         List<Map<String, Object>> drops = new ArrayList<Map<String, Object>>();
-        Object rawDropTable = invokeBest(crop, "getDropTable", new Object[0]);
+        Object rawDropTable = invokeExactNoArg(crop, "getDropTable");
         if (!(rawDropTable instanceof Map)) return drops;
 
-        Number rawDropChance = asNumber(invokeBest(crop, "getDropChance", new Object[0]));
+        Number rawDropChance = asNumber(invokeExactNoArg(crop, "getDropChance"));
         if (rawDropChance == null) return drops;
         double averageRounds = rawDropChance.doubleValue() * Math.pow(1.03D, gain);
         double averageGainBonus = (gain + 1) / 100.0D;
@@ -1316,8 +1316,8 @@ public final class GtnhCalcOracleExporter {
             Class<?> cropSticks = Class.forName("com.gtnewhorizon.cropsnh.tileentity.TileEntityCropSticks");
             int maximumNutrients = readStaticInt(cropSticks.getName(), "MAX_NUTRIENT_SCORE", -1);
             int tickRate = readStaticInt(cropSticks.getName(), "TICK_RATE", -1);
-            Number tier = firstNumber(crop, "getTier");
-            Number growthDuration = firstNumber(crop, "getGrowthDuration");
+            Number tier = asNumber(invokeExactNoArg(crop, "getTier"));
+            Number growthDuration = asNumber(invokeExactNoArg(crop, "getGrowthDuration"));
             if (maximumNutrients < 0 || tickRate <= 0 || tier == null || growthDuration == null) return null;
             Number growthRate = asNumber(
                 invokeStaticBest(
@@ -2711,6 +2711,29 @@ public final class GtnhCalcOracleExporter {
         return null;
     }
 
+    private Object invokeExactNoArg(Object target, String methodName) {
+        if (target == null || methodName == null) return null;
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            method.setAccessible(true);
+            return method.invoke(target);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private Object invokeCropsNhSeedItem(Object crop, Object seedStats) {
+        if (crop == null || seedStats == null) return null;
+        try {
+            Class<?> seedStatsApi = Class.forName("com.gtnewhorizon.cropsnh.api.ISeedStats");
+            Method method = crop.getClass().getMethod("getSeedItem", seedStatsApi);
+            method.setAccessible(true);
+            return method.invoke(crop, seedStats);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private Object invokeStaticBest(Class<?> type, String methodName, Object[] args) {
         if (type == null || methodName == null) return null;
         for (Method method : type.getMethods()) {
@@ -2730,6 +2753,10 @@ public final class GtnhCalcOracleExporter {
 
     private String invokeString(Object target, String methodName) {
         Object value = invokeBest(target, methodName, new Object[0]);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private String stringValue(Object value) {
         return value == null ? null : String.valueOf(value);
     }
 
