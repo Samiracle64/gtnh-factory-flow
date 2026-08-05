@@ -23,6 +23,7 @@ const outDir = path.join(datasetsRoot, versionId);
 const pipelineDir = ".pipeline";
 const serverInstanceDir = path.join(pipelineDir, "server-instance", versionId);
 const clientInstanceDir = path.join(pipelineDir, "client-instance", versionId);
+const clientDatasetDir = path.join(pipelineDir, "client-dataset", versionId);
 const rawExportDir = path.join(pipelineDir, "raw-export", versionId);
 
 await fs.mkdir(outDir, { recursive: true });
@@ -58,12 +59,18 @@ if (splitServerClientExport) {
   const clientIconDecision = await shouldRunClientIconPass();
   if (clientIconDecision.runClient) {
     console.log(`Running client icon export for ${versionId}: ${clientIconDecision.reason}`);
+    await fs.rm(clientDatasetDir, { recursive: true, force: true });
+    await fs.mkdir(clientDatasetDir, { recursive: true });
     await runExporter("client icon export", {
       GTNH_INSTANCE_DIR: clientInstanceDir,
+      GTNH_DATASET_OUT_DIR: clientDatasetDir,
       GTNH_EXPORT_PACK_KIND: "client",
       GTNH_EXPORT_PHASE: "client",
+      GTNH_ORACLE_STRICT: "false",
       GTNH_RENDER_STACK_ICONS: process.env.GTNH_RENDER_STACK_ICONS ?? "true",
     });
+    await mergeClientPresentation();
+    await fs.rm(clientDatasetDir, { recursive: true, force: true });
   } else {
     console.log(`Skipping client icon export for ${versionId}: ${clientIconDecision.reason}`);
     if (clientIconDecision.previousDatasetDir) {
@@ -138,7 +145,9 @@ function validateDataset(dataset) {
     );
   }
   if (!dataset.sourceInfo || dataset.sourceInfo.sourceId === "unknown") {
-    throw new Error("recipes.json sourceInfo.sourceId must identify nesql, recex, nerd, or gtnh-oracle.");
+    throw new Error(
+      "recipes.json sourceInfo.sourceId must identify nesql, recex, nerd, or gtnh-oracle.",
+    );
   }
   if (!Array.isArray(dataset.resources)) {
     throw new Error("recipes.json resources must be an array.");
@@ -433,6 +442,30 @@ async function reusePreviousIcons(previousDatasetDir) {
 
   if (exitCode !== 0) {
     throw new Error(`Previous icon reuse failed with exit code ${exitCode}.`);
+  }
+}
+
+async function mergeClientPresentation() {
+  const exitCode = await new Promise((resolve) => {
+    const child = spawn(
+      "node",
+      [
+        "tools/dataset-pipeline/scripts/merge-client-presentation.mjs",
+        path.join(outDir, "recipes.json"),
+        path.join(clientDatasetDir, "recipes.json"),
+        outDir,
+        clientDatasetDir,
+      ],
+      {
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
+    child.on("exit", (code) => resolve(code ?? 1));
+  });
+
+  if (exitCode !== 0) {
+    throw new Error(`Client presentation merge failed with exit code ${exitCode}.`);
   }
 }
 

@@ -320,6 +320,7 @@ function normalizeGregtechNeiLayout(rawLayout) {
   return removeUndefined({
     source: text(rawLayout.source, "gregtech-recipe-map-frontend"),
     handlerClass: text(rawLayout.handlerClass, undefined),
+    backgroundImage: text(rawLayout.backgroundImage, undefined),
     canvas:
       Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
         ? { width: Math.round(width), height: Math.round(height) }
@@ -664,6 +665,7 @@ function normalizeExportedNeiLayout(rawLayout) {
     nei: {
       source: text(rawLayout.source, "gtnh-nei-handler"),
       handlerClass: text(rawLayout.handlerClass, undefined),
+      backgroundImage: text(rawLayout.backgroundImage, undefined),
       canvas,
       slots,
       progressBars: [],
