@@ -37,15 +37,24 @@ async function resolveDownload() {
 }
 
 async function resolveDailyArtifact() {
-  const artifactKind = packKind === "client" ? "mmcprism-java17-25" : "server-java17-25";
+  const artifactKinds =
+    packKind === "client"
+      ? ["mmcprism-java17-26", "mmcprism-java17-25"]
+      : ["server-java17-26", "server-java17-25"];
   const artifactsUrl = `https://api.github.com/repos/GTNewHorizons/DreamAssemblerXXL/actions/runs/${sourceRef}/artifacts`;
   const body = await githubJson(artifactsUrl);
-  const artifact = body.artifacts?.find(
-    (entry) => !entry.expired && entry.name.toLowerCase().includes(artifactKind),
-  );
+  const artifact = artifactKinds
+    .map((artifactKind) =>
+      body.artifacts?.find(
+        (entry) => !entry.expired && entry.name.toLowerCase().includes(artifactKind),
+      ),
+    )
+    .find(Boolean);
 
   if (!artifact) {
-    throw new Error(`No non-expired daily artifact matching ${artifactKind} for run ${sourceRef}.`);
+    throw new Error(
+      `No non-expired daily artifact matching ${artifactKinds.join(" or ")} for run ${sourceRef}.`,
+    );
   }
 
   return {

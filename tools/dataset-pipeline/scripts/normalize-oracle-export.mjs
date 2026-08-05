@@ -823,6 +823,9 @@ function normalizeIc2Crops(domain) {
       crop;
     const outputs = cropOutputs(baseVariant.drops ?? crop.drops);
     if (outputs.length === 0) {
+      if (crop.harvestable === false) {
+        continue;
+      }
       normalizationFailures.push({
         adapter: "ic2-crops",
         id: `${crop.owner ?? "unknown"}:${crop.id ?? crop.name ?? "unknown"}`,
@@ -869,6 +872,7 @@ function normalizeIc2Crops(domain) {
         variants: cropRuntimeVariants(crop, outputs, durationTicks),
         warnings: [
           "Crop drops and durations are calculated by live IC2/CropsNH crop-card methods. Only the exported stat presets are selectable; no client-side crop formula is applied.",
+          "Conditional crops assume their required supporting block and environment are satisfied by the farm.",
         ],
       },
       notes: [

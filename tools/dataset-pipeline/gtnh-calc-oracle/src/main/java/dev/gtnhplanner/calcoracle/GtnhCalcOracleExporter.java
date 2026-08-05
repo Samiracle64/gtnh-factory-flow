@@ -1189,6 +1189,7 @@ public final class GtnhCalcOracleExporter {
             displayItem = invokeBest(crop, "getDisplayItem", new Object[] { crop });
         }
         putIfPresent(exported, "displayItem", resourceFromUnknown(displayItem));
+        exported.put("harvestable", Boolean.valueOf(cropCanBeHarvested(crop)));
         List<Map<String, Object>> variants = cropVariants(crop);
         putIfPresent(exported, "variants", variants);
         if (!variants.isEmpty()) {
@@ -1220,8 +1221,16 @@ public final class GtnhCalcOracleExporter {
         int gain,
         int resistance
     ) {
-        Object tile = cropTileProxy(crop, growth, gain, resistance, cropMaxSize(crop));
+        Object tile = cropTileProxy(crop, growth, gain, resistance, cropMaxSize(crop), false);
+        int harvestSize = cropOptimalHarvestSize(crop, tile);
+        invokeBest(tile, "setSize", new Object[] { Byte.valueOf((byte) harvestSize) });
         List<Map<String, Object>> drops = cropDrops(crop, tile, gain);
+        boolean compatibleBlockAssumed = false;
+        if (drops.isEmpty()) {
+            tile = cropTileProxy(crop, growth, gain, resistance, harvestSize, true);
+            drops = cropDrops(crop, tile, gain);
+            compatibleBlockAssumed = !drops.isEmpty();
+        }
         if (drops.isEmpty()) {
             return;
         }
@@ -1232,6 +1241,9 @@ public final class GtnhCalcOracleExporter {
         variant.put("growth", Integer.valueOf(growth));
         variant.put("gain", Integer.valueOf(gain));
         variant.put("resistance", Integer.valueOf(resistance));
+        if (compatibleBlockAssumed) {
+            variant.put("environmentAssumption", "compatible-block-below");
+        }
         putIfPresent(variant, "seed", itemStack(generateCropSeed(crop, growth, gain, resistance, 4)));
         variant.put("drops", drops);
         variant.put("durationTicks", Integer.valueOf(cropDurationTicks(crop, tile)));
@@ -1313,18 +1325,38 @@ public final class GtnhCalcOracleExporter {
     }
 
     private int cropDurationTicks(Object crop, Object tile) {
-        int maxSize = cropMaxSize(crop);
-        int startSize = Math.max(1, Math.min(maxSize - 1, cropSizeAfterHarvest(crop, tile)));
+        int harvestSize = cropOptimalHarvestSize(crop, tile);
+        invokeBest(tile, "setSize", new Object[] { Byte.valueOf((byte) harvestSize) });
+        int startSize = Math.max(1, Math.min(harvestSize - 1, cropSizeAfterHarvest(crop, tile)));
         int tickRate = readStaticInt("ic2.core.crop.TileEntityCrop", "tickRate", 256);
         int growthRate = Math.max(1, cropGrowthRate(crop, tile));
         int totalTicks = 0;
-        for (int size = startSize; size < maxSize; size++) {
+        for (int size = startSize; size < harvestSize; size++) {
             invokeBest(tile, "setSize", new Object[] { Byte.valueOf((byte) size) });
             Number duration = asNumber(invokeBest(crop, "growthDuration", new Object[] { tile }));
             int growthDuration = duration == null ? 200 : Math.max(1, duration.intValue());
             totalTicks += Math.max(1, (int) Math.ceil(growthDuration / (double) growthRate)) * tickRate;
         }
         return Math.max(1, totalTicks);
+    }
+
+    private int cropOptimalHarvestSize(Object crop, Object tile) {
+        int maxSize = cropMaxSize(crop);
+        Number optimal = asNumber(invokeBest(crop, "getOptimalHavestSize", new Object[] { tile }));
+        if (optimal == null) {
+            optimal = asNumber(invokeBest(crop, "getOptimalHarvestSize", new Object[] { tile }));
+        }
+        if (optimal == null) {
+            optimal = asNumber(invokeBest(crop, "getOptimalHarvestAge", new Object[] { tile }));
+        }
+        return optimal == null ? maxSize : Math.max(1, Math.min(maxSize, optimal.intValue()));
+    }
+
+    private boolean cropCanBeHarvested(Object crop) {
+        Object tile = cropTileProxy(crop, 23, 31, 0, cropMaxSize(crop), true);
+        invokeBest(tile, "setSize", new Object[] { Byte.valueOf((byte) cropOptimalHarvestSize(crop, tile)) });
+        Object harvestable = invokeBest(crop, "canBeHarvested", new Object[] { tile });
+        return !(harvestable instanceof Boolean) || ((Boolean) harvestable).booleanValue();
     }
 
     private int cropGrowthRate(Object crop, Object tile) {
@@ -1346,7 +1378,14 @@ public final class GtnhCalcOracleExporter {
         return maxSize == null ? 1 : Math.max(1, maxSize.intValue());
     }
 
-    private Object cropTileProxy(final Object crop, int growth, int gain, int resistance, int size) {
+    private Object cropTileProxy(
+        final Object crop,
+        int growth,
+        int gain,
+        int resistance,
+        int size,
+        final boolean compatibleBlockBelow
+    ) {
         try {
             Class<?> cropTileClass = Class.forName("ic2.api.crops.ICropTile");
             final byte[] cropSize = new byte[] { (byte) Math.max(1, size) };
@@ -1354,6 +1393,7 @@ public final class GtnhCalcOracleExporter {
             final byte[] cropGain = new byte[] { (byte) Math.max(0, gain) };
             final byte[] cropResistance = new byte[] { (byte) Math.max(0, resistance) };
             final NBTTagCompound customData = new NBTTagCompound();
+            final Object cropWorld = cropWorld();
             InvocationHandler handler = new InvocationHandler() {
                 @Override
                 public Object invoke(Object proxy, Method method, Object[] args) {
@@ -1402,13 +1442,13 @@ public final class GtnhCalcOracleExporter {
                     if ("getHumidity".equals(name) || "getNutrients".equals(name) || "getAirQuality".equals(name)) {
                         return Byte.valueOf((byte) 10);
                     }
-                    if ("getWorld".equals(name)) return null;
+                    if ("getWorld".equals(name)) return cropWorld;
                     if ("getLocation".equals(name)) return new ChunkCoordinates(0, 64, 0);
                     if ("getLightLevel".equals(name)) return Integer.valueOf(15);
                     if ("pick".equals(name) || "harvest".equals(name)) return Boolean.FALSE;
                     if ("harvest_automated".equals(name)) return new ItemStack[0];
                     if ("reset".equals(name) || "updateState".equals(name)) return null;
-                    if ("isBlockBelow".equals(name)) return Boolean.FALSE;
+                    if ("isBlockBelow".equals(name)) return Boolean.valueOf(compatibleBlockBelow);
                     if ("generateSeeds".equals(name)) {
                         Object seedCrop = args != null && args.length > 0 ? args[0] : crop;
                         int seedGrowth = args != null && args.length > 1 && args[1] instanceof Number ? ((Number) args[1]).intValue() : cropGrowth[0];
@@ -1421,6 +1461,15 @@ public final class GtnhCalcOracleExporter {
                 }
             };
             return Proxy.newProxyInstance(cropTileClass.getClassLoader(), new Class<?>[] { cropTileClass }, handler);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private Object cropWorld() {
+        try {
+            Object server = FMLCommonHandler.instance().getMinecraftServerInstance();
+            return invokeBest(server, "worldServerForDimension", new Object[] { Integer.valueOf(0) });
         } catch (Throwable ignored) {
             return null;
         }
@@ -2400,6 +2449,7 @@ public final class GtnhCalcOracleExporter {
                 continue;
             }
             try {
+                method.setAccessible(true);
                 return method.invoke(target, args);
             } catch (Throwable ignored) {
             }
