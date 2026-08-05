@@ -20,6 +20,7 @@ import net.minecraft.item.crafting.ShapelessRecipes;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.ChunkCoordinates;
 import net.minecraft.util.StatCollector;
+import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.oredict.OreDictionary;
 import net.minecraftforge.oredict.ShapedOreRecipe;
@@ -1254,10 +1255,10 @@ public final class GtnhCalcOracleExporter {
         int samples = Math.max(1, Integer.getInteger("gtnh.oracle.cropDropSamples", 256).intValue());
         Map<String, Map<String, Object>> resourcesByKey = new LinkedHashMap<String, Map<String, Object>>();
         Map<String, Double> amountsByKey = new LinkedHashMap<String, Double>();
-        int maxSize = cropMaxSize(crop);
+        int harvestSize = cropOptimalHarvestSize(crop, tile);
 
         for (int index = 0; index < samples; index++) {
-            invokeBest(tile, "setSize", new Object[] { Byte.valueOf((byte) maxSize) });
+            invokeBest(tile, "setSize", new Object[] { Byte.valueOf((byte) harvestSize) });
             Object rawDrop = invokeBest(crop, "getGain", new Object[] { tile });
             if (!(rawDrop instanceof ItemStack)) {
                 continue;
@@ -1468,8 +1469,7 @@ public final class GtnhCalcOracleExporter {
 
     private Object cropWorld() {
         try {
-            Object server = FMLCommonHandler.instance().getMinecraftServerInstance();
-            return invokeBest(server, "worldServerForDimension", new Object[] { Integer.valueOf(0) });
+            return DimensionManager.getWorld(0);
         } catch (Throwable ignored) {
             return null;
         }
