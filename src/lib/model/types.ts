@@ -1,4 +1,4 @@
-export const PROJECT_SCHEMA_VERSION = 1;
+export const PROJECT_SCHEMA_VERSION = 2;
 export const TICKS_PER_SECOND = 20;
 
 export type ItemId = string;
@@ -305,10 +305,24 @@ export interface FuelProfile {
   notes?: string;
 }
 
+export type ProbabilityMode = "expected" | "reliable";
+
+export interface CalculationSettings {
+  /**
+   * `expected` reproduces the long-run NEI average. `reliable` uses a
+   * conservative lower confidence bound over `probabilityWindowSeconds`.
+   */
+  probabilityMode: ProbabilityMode;
+  probabilityConfidence: number;
+  probabilityWindowSeconds: number;
+}
+
 export interface FactoryProject {
   schemaVersion: typeof PROJECT_SCHEMA_VERSION;
   id: string;
   name: string;
+  datasetVersionId?: string;
+  calculationSettings?: CalculationSettings;
   targetRate?: TargetRate;
   recipes: Recipe[];
   nodes: FactoryNode[];
@@ -351,6 +365,8 @@ export interface NodeThroughputResult {
   inputs: Record<ResourceKey, ResourceFlow>;
   outputs: Record<ResourceKey, ResourceFlow>;
   euT: number;
+  amperage?: number;
+  voltageTier?: Exclude<MachineTier, "DEMO">;
   requiredRatePerSecond: number;
   maxRatePerSecond: number;
   utilization: number;

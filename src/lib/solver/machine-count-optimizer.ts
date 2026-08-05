@@ -1,5 +1,4 @@
 import {
-  getChanceMultiplier,
   getFilledCellFluidEquivalent,
   isRecipeInputConsumed,
   makeResourceKey,
@@ -16,6 +15,7 @@ import type {
 } from "@/lib/model/types";
 import { TICKS_PER_SECOND } from "@/lib/model/types";
 import { resolveNodeRecipe } from "./resolved-recipe";
+import { getProbabilityAdjustedOutputRate } from "./probability";
 
 const EPSILON = 0.000001;
 const STORAGE_BUS_PREFIX = "storage-bus:";
@@ -1270,7 +1270,10 @@ function buildGraphContext(project: FactoryProject): GraphContext {
 
   for (const node of project.nodes) {
     adjacency.set(node.id, []);
-    ratePlans.set(node.id, buildRatePlan(node, recipesById.get(node.recipeId)));
+    ratePlans.set(
+      node.id,
+      buildRatePlan(node, recipesById.get(node.recipeId), project.calculationSettings),
+    );
   }
   for (const storageKey of new Set(storageResourceById.values())) {
     adjacency.set(storageBusId(storageKey), []);
@@ -1354,7 +1357,11 @@ function buildGraphContext(project: FactoryProject): GraphContext {
   };
 }
 
-function buildRatePlan(node: FactoryNode, recipe: Recipe | undefined): RatePlan {
+function buildRatePlan(
+  node: FactoryNode,
+  recipe: Recipe | undefined,
+  calculationSettings: FactoryProject["calculationSettings"],
+): RatePlan {
   if (!recipe) {
     return {
       node,
@@ -1397,7 +1404,11 @@ function buildRatePlan(node: FactoryNode, recipe: Recipe | undefined): RatePlan 
   }
 
   for (const output of effectiveRecipe.outputs) {
-    const outputRate = output.amount * getChanceMultiplier(output) * operationRatePerMachine;
+    const outputRate = getProbabilityAdjustedOutputRate(
+      output,
+      operationRatePerMachine,
+      calculationSettings,
+    );
     addRate(outputs, makeResourceKey(output.kind, output.id), outputRate);
   }
 

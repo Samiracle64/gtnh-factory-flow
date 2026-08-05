@@ -41,11 +41,27 @@ import {
   extractProjectJsonFromSvg,
 } from "@/lib/import-export/plan-image";
 import { useFactoryStore } from "@/store/factory-store";
+import type { ProjectSummary } from "@/lib/projects";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 interface TopBarProps {
   onLoadDatasetVersion: (versionId: string) => void;
+  projects: ProjectSummary[];
+  isProjectLibraryReady: boolean;
+  onCreateProject: () => void;
+  onDuplicateProject: () => void;
+  onSelectProject: (projectId: string) => void;
+  onDeleteProject: () => void;
 }
-export function TopBar({ onLoadDatasetVersion }: TopBarProps) {
+export function TopBar({
+  onLoadDatasetVersion,
+  projects,
+  isProjectLibraryReady,
+  onCreateProject,
+  onDuplicateProject,
+  onSelectProject,
+  onDeleteProject,
+}: TopBarProps) {
   const projectInputRef = useRef<HTMLInputElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const [isExportMenuOpen, setExportMenuOpen] = useState(false);
@@ -57,6 +73,7 @@ export function TopBar({ onLoadDatasetVersion }: TopBarProps) {
   const selectedDatasetVersionId = useFactoryStore((state) => state.selectedDatasetVersionId);
   const isDatasetLoading = useFactoryStore((state) => state.isDatasetLoading);
   const isProjectImporting = useFactoryStore((state) => state.isProjectImporting);
+  const isOptimizing = useFactoryStore((state) => state.isOptimizing);
   const canUndo = useFactoryStore((state) => state.undoHistory.length > 0);
   const canRedo = useFactoryStore((state) => state.redoHistory.length > 0);
   const setProject = useFactoryStore((state) => state.setProject);
@@ -198,10 +215,10 @@ export function TopBar({ onLoadDatasetVersion }: TopBarProps) {
   }, [redo, undo]);
 
   return (
-    <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-neutral-200 bg-white px-4 py-3">
-      <div className="flex min-w-[260px] flex-1 items-start gap-2">
-        <div className="grid min-w-0 gap-1">
-          <h1 className="truncate text-lg font-semibold text-neutral-950">GTNH Planner</h1>
+    <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-neutral-200 bg-white px-3 py-2 lg:gap-3 lg:px-4">
+      <div className="flex w-full min-w-0 flex-[2] flex-wrap items-end gap-2 lg:w-auto lg:min-w-[620px] lg:gap-3">
+        <div className="grid min-w-36 gap-1">
+          <h1 className="truncate text-base font-semibold text-neutral-950">GTNH Planner</h1>
           <label className="grid max-w-52 gap-0.5">
             <span className="sr-only">GTNH version</span>
             <select
@@ -222,20 +239,32 @@ export function TopBar({ onLoadDatasetVersion }: TopBarProps) {
             </select>
           </label>
         </div>
+        <ProjectSwitcher
+          projects={projects}
+          isReady={isProjectLibraryReady}
+          onCreate={onCreateProject}
+          onDuplicate={onDuplicateProject}
+          onSelect={onSelectProject}
+          onDelete={onDeleteProject}
+        />
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex w-full flex-nowrap gap-2 overflow-x-auto pb-0.5 lg:w-auto lg:overflow-visible lg:pb-0">
         <ToolbarButton icon={Undo2} label="Undo" disabled={!canUndo} onClick={undo} />
         <ToolbarButton icon={Redo2} label="Redo" disabled={!canRedo} onClick={redo} />
         <button
           type="button"
           onClick={optimizeMachineCounts}
-          disabled={project.nodes.length === 0}
+          disabled={project.nodes.length === 0 || isOptimizing}
           title="Set every machine count to its suggested best ratio"
           aria-label="Set every machine count to its suggested best ratio"
           className="inline-flex h-9 w-9 items-center justify-center rounded border border-cyan-700 bg-cyan-600 text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-100 disabled:text-neutral-400"
         >
-          <WandSparkles className="h-4 w-4" />
+          {isOptimizing ? (
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+          ) : (
+            <WandSparkles className="h-4 w-4" />
+          )}
         </button>
         <ToolbarButton
           icon={Trash2}

@@ -127,6 +127,19 @@ smelting, Thaumcraft crafting registries, Forestry bee species products, and IC2
 metadata. The normalizer fails strict mode for oracle-eligible recipes that lack computed
 runtime variants and writes coverage details to `oracle/oracle-report.json`.
 
+After the server/client merge, generation also writes
+`oracle/dataset-quality-report.json`. The build fails before publication if stable or daily drops
+below its guarded recipe, NEI-layout, NEI-background, crop, or computed-runtime baseline. The gate
+also requires all three crop stat variants, distinct NBT seed identities for every crop, and zero
+oracle-eligible recipes without a computed runtime result. Thresholds can be raised or temporarily
+overridden with `GTNH_QUALITY_MIN_<METRIC>` environment variables, but default to conservative
+values below the current healthy datasets.
+
+Shared server/client recipes are matched first through their exported semantic source identity
+(`recipeMap` plus `rawRecipeId`/`sourceIdentifier`) and then through the legacy resource signature.
+This lets the client attach NEI presentation when harmless numeric differences exist, while the
+server recipe, inputs, outputs, and runtime calculations remain authoritative.
+
 ## Non-Goals For MVP
 
 - No in-browser modpack parsing.

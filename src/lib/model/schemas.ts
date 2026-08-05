@@ -323,10 +323,22 @@ export const fuelProfileSchema = z
     path: ["euPerLiter"],
   });
 
+export const calculationSettingsSchema = z.object({
+  probabilityMode: z.enum(["expected", "reliable"]).default("expected"),
+  probabilityConfidence: z.number().min(0.5).max(0.999).default(0.95),
+  probabilityWindowSeconds: z.number().positive().max(86_400).default(60),
+});
+
 export const factoryProjectSchema = z.object({
   schemaVersion: z.literal(PROJECT_SCHEMA_VERSION),
   id: z.string().min(1),
   name: z.string().min(1),
+  datasetVersionId: z.string().min(1).optional(),
+  calculationSettings: calculationSettingsSchema.default({
+    probabilityMode: "expected",
+    probabilityConfidence: 0.95,
+    probabilityWindowSeconds: 60,
+  }),
   targetRate: targetRateSchema.optional(),
   recipes: z.array(recipeSchema),
   nodes: z.array(factoryNodeSchema),

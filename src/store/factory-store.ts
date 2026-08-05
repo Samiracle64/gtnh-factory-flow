@@ -8,6 +8,10 @@ import { calculateThroughput } from "@/lib/solver";
 import { applyRecipeInputOverrides } from "@/lib/model/recipe-input-overrides";
 import { optimizeMachineCountsForProject } from "@/lib/solver/machine-count-optimizer";
 import {
+  canOptimizeInWorker,
+  optimizeMachineCountsInWorker,
+} from "@/lib/solver/optimization-worker-client";
+import {
   getFilledCellFluidEquivalent,
   getResourceKey,
   isOreDictionaryResource,
@@ -38,12 +42,15 @@ interface FactoryStore {
   project: FactoryProject;
   undoHistory: FactoryProject[];
   redoHistory: FactoryProject[];
+  historyCoalesceKey?: string;
+  historyCoalesceAt?: number;
   datasetManifest?: DatasetManifest;
   dataset?: RecipeDataset;
   datasetManifestUrl?: string;
   selectedDatasetVersionId?: string;
   isDatasetLoading: boolean;
   isProjectImporting: boolean;
+  isOptimizing: boolean;
   datasetError?: string;
   recipeSearch: string;
   maxTierFilter: TierFilter;
@@ -63,6 +70,10 @@ interface FactoryStore {
   lastResult: ThroughputResult;
   setProject: (project: FactoryProject) => void;
   markHydratedProject: (project: FactoryProject) => void;
+  renameProject: (name: string) => void;
+  updateCalculationSettings: (
+    patch: Partial<NonNullable<FactoryProject["calculationSettings"]>>,
+  ) => void;
   undo: () => void;
   redo: () => void;
   setDatasetManifest: (manifest: DatasetManifest, manifestUrl: string) => void;
@@ -197,12 +208,15 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   project: initialProject,
   undoHistory: [],
   redoHistory: [],
+  historyCoalesceKey: undefined,
+  historyCoalesceAt: undefined,
   datasetManifest: undefined,
   dataset: undefined,
   datasetManifestUrl: undefined,
   selectedDatasetVersionId: undefined,
   isDatasetLoading: false,
   isProjectImporting: false,
+  isOptimizing: false,
   datasetError: undefined,
   recipeSearch: "",
   maxTierFilter: "all",
@@ -228,6 +242,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       lastResult: calculateThroughput(nextProject),
       undoHistory: [],
       redoHistory: [],
+      historyCoalesceKey: undefined,
+      historyCoalesceAt: undefined,
     });
   },
   markHydratedProject: (project) => {
@@ -239,6 +255,36 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       lastResult: calculateThroughput(nextProject),
       undoHistory: [],
       redoHistory: [],
+      historyCoalesceKey: undefined,
+      historyCoalesceAt: undefined,
+    });
+  },
+  renameProject: (name) => {
+    set((state) => {
+      const normalizedName = name.trim();
+      if (!normalizedName || normalizedName === state.project.name) {
+        return state;
+      }
+      const project = touchProject({ ...state.project, name: normalizedName });
+      return withProjectHistory(state, { project });
+    });
+  },
+  updateCalculationSettings: (patch) => {
+    set((state) => {
+      const project = touchProject({
+        ...state.project,
+        calculationSettings: {
+          probabilityMode: "expected",
+          probabilityConfidence: 0.95,
+          probabilityWindowSeconds: 60,
+          ...state.project.calculationSettings,
+          ...patch,
+        },
+      });
+      return withProjectHistory(state, {
+        project,
+        lastResult: calculateThroughput(project),
+      });
     });
   },
   undo: () => {
@@ -252,6 +298,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         ...restoreProjectState(state, previousProject),
         undoHistory: state.undoHistory.slice(0, -1),
         redoHistory: pushProjectHistory(state.redoHistory, state.project),
+        historyCoalesceKey: undefined,
+        historyCoalesceAt: undefined,
       };
     });
   },
@@ -266,6 +314,8 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         ...restoreProjectState(state, nextProject),
         undoHistory: pushProjectHistory(state.undoHistory, state.project),
         redoHistory: state.redoHistory.slice(0, -1),
+        historyCoalesceKey: undefined,
+        historyCoalesceAt: undefined,
       };
     });
   },
@@ -284,7 +334,10 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   setDataset: (dataset) => {
     set((state) => ({
       dataset,
-      project: refreshProjectResourceIcons(state.project, dataset),
+      project: {
+        ...refreshProjectResourceIcons(state.project, dataset),
+        datasetVersionId: dataset.datasetVersionId,
+      },
       recipeResourceHistory: refreshResourceHistoryIcons(state.recipeResourceHistory, dataset),
       recipeBrowserResource: state.recipeBrowserResource
         ? refreshBrowserResourceIcon(state.recipeBrowserResource, dataset)
@@ -577,18 +630,32 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   },
   updateNode: (nodeId, patch) => {
     set((state) => {
-      const project = touchProject(
-        pruneInvalidEdgesAndOrphanStorages({
-          ...state.project,
-          nodes: state.project.nodes.map((node) =>
-            node.id === nodeId ? { ...node, ...patch } : node,
-          ),
-        }),
+      const isVisualOnly = Object.keys(patch).every(
+        (key) => key === "position" || key === "colorTag",
       );
-      return withProjectHistory(state, {
-        project,
-        lastResult: calculateThroughput(project),
-      });
+      const project = touchProject(
+        isVisualOnly
+          ? {
+              ...state.project,
+              nodes: state.project.nodes.map((node) =>
+                node.id === nodeId ? { ...node, ...patch } : node,
+              ),
+            }
+          : pruneInvalidEdgesAndOrphanStorages({
+              ...state.project,
+              nodes: state.project.nodes.map((node) =>
+                node.id === nodeId ? { ...node, ...patch } : node,
+              ),
+            }),
+      );
+      return withProjectHistory(
+        state,
+        {
+          project,
+          ...(isVisualOnly ? {} : { lastResult: calculateThroughput(project) }),
+        },
+        isVisualOnly ? `node-visual:${nodeId}` : undefined,
+      );
     });
   },
   deleteNode: (nodeId) => {
@@ -670,7 +737,10 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         sourceHandle:
           side === "output"
             ? handleId
-            : makeResourceHandleId("output", { kind: storageResource.kind, id: storageResource.id }),
+            : makeResourceHandleId("output", {
+                kind: storageResource.kind,
+                id: storageResource.id,
+              }),
         targetHandle:
           side === "input"
             ? handleId
@@ -710,7 +780,9 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
       };
       const project = touchProject(
         pruneOrphanStorages(
-          duplicateEdge ? projectWithEdge : applyEdgeInputOverride(projectWithEdge, edge, selectedResource),
+          duplicateEdge
+            ? projectWithEdge
+            : applyEdgeInputOverride(projectWithEdge, edge, selectedResource),
         ),
       );
 
@@ -785,6 +857,11 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   },
   updateStorage: (storageId, patch) => {
     set((state) => {
+      const isVisualOnly = Object.keys(patch).every((key) =>
+        ["position", "colorTag", "displayName", "iconPath", "iconAtlas", "dominantColor"].includes(
+          key,
+        ),
+      );
       const project = touchProject({
         ...state.project,
         storages: (state.project.storages ?? []).map((storage) =>
@@ -792,10 +869,14 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         ),
       });
 
-      return withProjectHistory(state, {
-        project,
-        lastResult: calculateThroughput(project),
-      });
+      return withProjectHistory(
+        state,
+        {
+          project,
+          ...(isVisualOnly ? {} : { lastResult: calculateThroughput(project) }),
+        },
+        isVisualOnly ? `storage-visual:${storageId}` : undefined,
+      );
     });
   },
   setStoragePosition: (storageId, position) => {
@@ -807,9 +888,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         ),
       });
 
-      return withProjectHistory(state, {
-        project,
-      });
+      return withProjectHistory(state, { project }, `storage-position:${storageId}`);
     });
   },
   setNodePosition: (nodeId, position) => {
@@ -821,7 +900,7 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         ),
       });
 
-      return withProjectHistory(state, { project });
+      return withProjectHistory(state, { project }, `node-position:${nodeId}`);
     });
   },
   connectNodes: (sourceNodeId, targetNodeId, resource) => {
@@ -939,6 +1018,9 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
   },
   updateEdge: (edgeId, patch) => {
     set((state) => {
+      const isVisualOnly = Object.keys(patch).every(
+        (key) => key === "label" || key === "labelOffset",
+      );
       const project = touchProject({
         ...state.project,
         edges: state.project.edges.map((edge) =>
@@ -946,10 +1028,14 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
         ),
       });
 
-      return withProjectHistory(state, {
-        project,
-        lastResult: calculateThroughput(project),
-      });
+      return withProjectHistory(
+        state,
+        {
+          project,
+          ...(isVisualOnly ? {} : { lastResult: calculateThroughput(project) }),
+        },
+        isVisualOnly ? `edge-visual:${edgeId}` : undefined,
+      );
     });
   },
   autoConnectNode: (nodeId) => {
@@ -999,6 +1085,19 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     });
   },
   optimizeMachineCount: (nodeId) => {
+    if (canOptimizeInWorker()) {
+      const snapshot = get().project;
+      set({ isOptimizing: true });
+      void optimizeMachineCountsInWorker(snapshot)
+        .then((optimized) => {
+          set((state) => applyWorkerOptimization(state, snapshot, optimized.machineCounts, nodeId));
+        })
+        .catch((error) => {
+          console.error(error instanceof Error ? error.message : "Machine optimization failed.");
+          set({ isOptimizing: false });
+        });
+      return;
+    }
     set((state) => {
       const currentNode = state.project.nodes.find((node) => node.id === nodeId);
       if (!currentNode) {
@@ -1023,6 +1122,22 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
     });
   },
   optimizeMachineCounts: () => {
+    if (canOptimizeInWorker()) {
+      const snapshot = get().project;
+      if (snapshot.nodes.length === 0) {
+        return;
+      }
+      set({ isOptimizing: true });
+      void optimizeMachineCountsInWorker(snapshot)
+        .then((optimized) => {
+          set((state) => applyWorkerOptimization(state, snapshot, optimized.machineCounts));
+        })
+        .catch((error) => {
+          console.error(error instanceof Error ? error.message : "Machine optimization failed.");
+          set({ isOptimizing: false });
+        });
+      return;
+    }
     set((state) => {
       if (state.project.nodes.length === 0) {
         return state;
@@ -1093,20 +1208,64 @@ export const useFactoryStore = create<FactoryStore>((set, get) => ({
 function withProjectHistory(
   state: FactoryStore,
   updates: Partial<FactoryStore> & { project?: FactoryProject },
+  coalesceKey?: string,
 ): Partial<FactoryStore> {
   if (!updates.project || updates.project === state.project) {
     return updates;
   }
 
+  const now = Date.now();
+  const shouldCoalesce =
+    Boolean(coalesceKey) &&
+    state.historyCoalesceKey === coalesceKey &&
+    now - (state.historyCoalesceAt ?? 0) < 750;
   return {
     ...updates,
-    undoHistory: pushProjectHistory(state.undoHistory, state.project),
+    undoHistory: shouldCoalesce
+      ? state.undoHistory
+      : pushProjectHistory(state.undoHistory, state.project),
     redoHistory: [],
+    historyCoalesceKey: coalesceKey,
+    historyCoalesceAt: coalesceKey ? now : undefined,
   };
 }
 
 function pushProjectHistory(history: FactoryProject[], project: FactoryProject): FactoryProject[] {
   return [...history, project].slice(-PROJECT_HISTORY_LIMIT);
+}
+
+function applyWorkerOptimization(
+  state: FactoryStore,
+  snapshot: FactoryProject,
+  machineCounts: Map<string, number>,
+  onlyNodeId?: string,
+): Partial<FactoryStore> {
+  if (
+    state.project.id !== snapshot.id ||
+    state.project.metadata?.updatedAt !== snapshot.metadata?.updatedAt
+  ) {
+    return { isOptimizing: false };
+  }
+  const project = touchProject({
+    ...state.project,
+    nodes: state.project.nodes.map((node) => {
+      if (onlyNodeId && node.id !== onlyNodeId) {
+        return node;
+      }
+      const machineCount = machineCounts.get(node.id);
+      return machineCount === undefined || machineCount === node.machineCount
+        ? node
+        : { ...node, machineCount };
+    }),
+  });
+  if (haveSameMachineCounts(state.project, project)) {
+    return { isOptimizing: false };
+  }
+  return withProjectHistory(state, {
+    project,
+    lastResult: calculateThroughput(project),
+    isOptimizing: false,
+  });
 }
 
 function restoreProjectState(
@@ -1486,8 +1645,8 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
     return (
       edge.resourceKind === targetStorage.kind &&
       edge.resourceId === targetStorage.resourceId &&
-      effectiveSourceRecipe.outputs.some(
-        (output) => resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, output),
+      effectiveSourceRecipe.outputs.some((output) =>
+        resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, output),
       )
     );
   }
@@ -1500,8 +1659,8 @@ function isFactoryEdgeStillValid(project: FactoryProject, edge: FactoryEdge): bo
   const effectiveTargetRecipe = applyRecipeInputOverrides(targetRecipe, targetNode);
 
   return (
-    effectiveSourceRecipe.outputs.some(
-      (output) => resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, output),
+    effectiveSourceRecipe.outputs.some((output) =>
+      resourceMatchesInput({ kind: edge.resourceKind, id: edge.resourceId }, output),
     ) &&
     effectiveTargetRecipe.inputs.some(
       (input) =>
@@ -1566,9 +1725,8 @@ function buildEdgeBetweenNodes(
     const effectiveSourceRecipe = sourceNode
       ? applyRecipeInputOverrides(sourceRecipe, sourceNode)
       : sourceRecipe;
-    const matchedOutput = effectiveSourceRecipe.outputs.find(
-      (output) =>
-        resourceMatchesInput(sourceStorageResource(targetStorage), output),
+    const matchedOutput = effectiveSourceRecipe.outputs.find((output) =>
+      resourceMatchesInput(sourceStorageResource(targetStorage), output),
     );
     if (!matchedOutput) {
       return undefined;

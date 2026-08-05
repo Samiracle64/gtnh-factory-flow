@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { createGzip } from "node:zlib";
 import { pipeline } from "node:stream/promises";
+import { validateDatasetQualityStats } from "./dataset-quality.mjs";
 
 const channel = requiredEnv("GTNH_CHANNEL");
 const versionId = requiredEnv("GTNH_VERSION_ID");
@@ -94,6 +95,23 @@ if (!existsSync(recipeDatasetPath)) {
 
 console.log(`Validating dataset for ${versionId}.`);
 const datasetStats = await readDatasetStatsAndValidate(recipeDatasetPath);
+const qualityResult = validateDatasetQualityStats(datasetStats, channel);
+await fs.mkdir(path.join(outDir, "oracle"), { recursive: true });
+await fs.writeFile(
+  path.join(outDir, "oracle", "dataset-quality-report.json"),
+  `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      channel,
+      versionId,
+      ...qualityResult,
+      stats: datasetStats,
+    },
+    null,
+    2,
+  )}\n`,
+);
 const postProcessMaxDatasetBytes = positiveIntEnv(
   "GTNH_ICON_POST_PROCESS_MAX_DATASET_BYTES",
   450_000_000,
@@ -169,7 +187,15 @@ async function readDatasetStatsAndValidate(datasetPath) {
     recipeCount: 0,
     resourceCount: 0,
     recipeMapCount: 0,
+    neiRecipeCount: 0,
+    neiBackgroundCount: 0,
+    cropRecipeCount: 0,
+    computedRuntimeCount: 0,
+    oracleEligibleMissingCount: 0,
   };
+  const cropVariantIds = new Set();
+  const cropSeedIds = new Set();
+  const neiHandlerClasses = new Set();
   const countedArrays = new Map([
     ["recipes", "recipeCount"],
     ["resources", "resourceCount"],
@@ -199,6 +225,9 @@ async function readDatasetStatsAndValidate(datasetPath) {
 
       if (currentArrayKey) {
         counts[countedArrays.get(currentArrayKey)] += 1;
+        if (currentArrayKey === "recipes") {
+          analyzeRecipe(JSON.parse(line.replace(/,$/, "")));
+        }
       }
       continue;
     }
@@ -243,7 +272,38 @@ async function readDatasetStatsAndValidate(datasetPath) {
     recipeMaps: new Array(counts.recipeMapCount),
   });
 
-  return counts;
+  return {
+    ...counts,
+    cropVariantIds: [...cropVariantIds].sort(),
+    cropSeedIdCount: cropSeedIds.size,
+    neiHandlerClasses: [...neiHandlerClasses].sort(),
+  };
+
+  function analyzeRecipe(recipe) {
+    if (
+      recipe?.nei &&
+      (recipe.nei.source === "gtnh-nei-handler" || typeof recipe.nei.backgroundImage === "string")
+    ) {
+      counts.neiRecipeCount += 1;
+      if (recipe.nei.backgroundImage) counts.neiBackgroundCount += 1;
+      if (recipe.nei.handlerClass) neiHandlerClasses.add(recipe.nei.handlerClass);
+    }
+    const runtime = recipe?.runtimeCalculation;
+    if (runtime?.status === "computed") counts.computedRuntimeCount += 1;
+    if (runtime?.oracleEligible && runtime.status !== "computed") {
+      counts.oracleEligibleMissingCount += 1;
+    }
+    if (recipe?.kind !== "crop_produce") return;
+    counts.cropRecipeCount += 1;
+    for (const variant of runtime?.variants ?? []) {
+      if (typeof variant?.id === "string") cropVariantIds.add(variant.id);
+      for (const input of variant?.inputs ?? []) {
+        if (typeof input?.id === "string" && input.id.includes("#nbt-")) {
+          cropSeedIds.add(input.id);
+        }
+      }
+    }
+  }
 }
 
 async function writePipelineRecord(record) {

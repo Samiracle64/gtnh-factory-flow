@@ -475,7 +475,7 @@ export function RecipeBrowser() {
   ]);
   return (
     <>
-      <aside className="relative z-40 flex h-full min-h-[360px] flex-col border-r border-neutral-800 bg-[#25272c] text-neutral-100">
+      <aside className="relative z-40 flex h-full min-h-0 w-full flex-col border-r border-neutral-800 bg-[#25272c] text-neutral-100 lg:min-h-[360px]">
         <div className="border-b border-neutral-800 px-3 py-3">
           <label className="flex h-9 items-center gap-2 rounded-[4px] border border-neutral-700 bg-[#17191d] px-2 text-sm text-neutral-200 shadow-[inset_1px_1px_0_rgba(255,255,255,0.08)]">
             <Search className="h-4 w-4 text-neutral-500" />

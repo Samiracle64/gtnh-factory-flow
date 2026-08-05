@@ -46,6 +46,11 @@ describe("merge-client-presentation", () => {
           inputs: [seed],
           outputs: [{ kind: "item", id: "Thaumcraft:ItemEldritchObject@3", amount: 1 }],
           runtimeCalculation: { status: "computed", variants: [{ id: "server-runtime" }] },
+          source: {
+            exporter: "gtnh-oracle",
+            recipeMap: "Infusion",
+            rawRecipeId: "thaumcraft:infusion:shared",
+          },
           nei: { additionalInfo: ["authoritative"], slots: [] },
         },
       ],
@@ -78,8 +83,13 @@ describe("merge-client-presentation", () => {
           id: "thaumcraft:shared",
           kind: "thaumcraft_infusion",
           inputs: [seed],
-          outputs: [{ kind: "item", id: "Thaumcraft:ItemEldritchObject@3", amount: 1 }],
+          outputs: [{ kind: "item", id: "Thaumcraft:ItemEldritchObject@3", amount: 2 }],
           runtimeCalculation: { status: "computed", variants: [{ id: "client-runtime" }] },
+          source: {
+            exporter: "gtnh-oracle",
+            recipeMap: "Infusion",
+            rawRecipeId: "thaumcraft:infusion:shared",
+          },
           nei: {
             source: "gtnh-nei-handler",
             handlerClass: "thaumcraft.nei.InfusionRecipeHandler",

@@ -2,17 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { formatRate } from "@/lib/model";
-import type {
-  FactoryProject,
-  ResourceAmount,
-  ResourceBalance,
-} from "@/lib/model/types";
+import type { FactoryProject, ResourceAmount, ResourceBalance } from "@/lib/model/types";
 import { useFactoryStore } from "@/store/factory-store";
 import { ResourceIcon } from "./nei/ResourceIcon";
 
 export function InspectorPanel() {
   return (
-    <aside className="flex h-full min-h-[360px] flex-col bg-white">
+    <aside className="flex h-full min-h-0 w-full flex-col bg-white lg:min-h-[360px]">
       <SummaryPanel />
     </aside>
   );
@@ -25,12 +21,73 @@ function SummaryPanel() {
   const selectedNodeBottlenecks = useFactoryStore((state) => state.selectedNodeBottlenecks);
   const setHoveredNodeBottlenecks = useFactoryStore((state) => state.setHoveredNodeBottlenecks);
   const toggleNodeBottlenecks = useFactoryStore((state) => state.toggleNodeBottlenecks);
+  const updateCalculationSettings = useFactoryStore((state) => state.updateCalculationSettings);
   const nodeBottlenecks = result.bottlenecks.filter(
     (bottleneck) => bottleneck.kind === "node-capacity",
   ).length;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
+      <section className="shrink-0 rounded border border-neutral-200 bg-neutral-50 p-2">
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+          Calculation reliability
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <label className="grid gap-1 text-[10px] uppercase tracking-wide text-neutral-500">
+            Chance outputs
+            <select
+              aria-label="Chance output calculation"
+              value={project.calculationSettings?.probabilityMode ?? "expected"}
+              onChange={(event) =>
+                updateCalculationSettings({
+                  probabilityMode: event.target.value as "expected" | "reliable",
+                })
+              }
+              className="h-8 rounded border border-neutral-300 bg-white px-2 text-xs normal-case tracking-normal text-neutral-900"
+            >
+              <option value="expected">Long-run average</option>
+              <option value="reliable">Reliable lower bound</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-[10px] uppercase tracking-wide text-neutral-500">
+            Confidence
+            <select
+              aria-label="Probability confidence"
+              value={project.calculationSettings?.probabilityConfidence ?? 0.95}
+              disabled={project.calculationSettings?.probabilityMode !== "reliable"}
+              onChange={(event) =>
+                updateCalculationSettings({ probabilityConfidence: Number(event.target.value) })
+              }
+              className="h-8 rounded border border-neutral-300 bg-white px-1 text-xs normal-case tracking-normal text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-400"
+            >
+              <option value={0.9}>90%</option>
+              <option value={0.95}>95%</option>
+              <option value={0.99}>99%</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-[10px] uppercase tracking-wide text-neutral-500">
+            Window
+            <select
+              aria-label="Probability calculation window"
+              value={project.calculationSettings?.probabilityWindowSeconds ?? 60}
+              disabled={project.calculationSettings?.probabilityMode !== "reliable"}
+              onChange={(event) =>
+                updateCalculationSettings({ probabilityWindowSeconds: Number(event.target.value) })
+              }
+              className="h-8 rounded border border-neutral-300 bg-white px-2 text-xs normal-case tracking-normal text-neutral-900 disabled:bg-neutral-100 disabled:text-neutral-400"
+            >
+              <option value={60}>1 minute</option>
+              <option value={300}>5 minutes</option>
+              <option value={900}>15 minutes</option>
+              <option value={3600}>1 hour</option>
+            </select>
+          </label>
+        </div>
+        <p className="mt-2 text-[10px] leading-4 text-neutral-500">
+          Runtime overclocks, parallel and amperage are included. Maintenance and pollution are
+          shown only when future oracle exports provide authoritative values.
+        </p>
+      </section>
       <div className="grid shrink-0 grid-cols-2 gap-2">
         <Metric label="Total EU/t" value={formatRate(result.totalEuT, 0)} />
         <Metric label="EU/s" value={formatRate(result.totalEuPerSecond, 0)} />
@@ -232,7 +289,9 @@ function FlowIOSection({
     <div className="mt-3 flex min-h-0 flex-1 flex-col">
       <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
         <span>{title}</span>
-        <span>{items.length === totalCount ? items.length : `${items.length} / ${totalCount}`}</span>
+        <span>
+          {items.length === totalCount ? items.length : `${items.length} / ${totalCount}`}
+        </span>
       </div>
       {items.length === 0 ? (
         <p className="rounded border border-neutral-200 bg-white px-2 py-2 text-xs text-neutral-500">
@@ -307,11 +366,7 @@ function filterFlowItems(items: ResourceBalance[], filter: string) {
   }
 
   return items.filter((balance) =>
-    [
-      balance.key,
-      balance.resourceId,
-      balance.displayName,
-    ]
+    [balance.key, balance.resourceId, balance.displayName]
       .filter(Boolean)
       .join(" ")
       .toLowerCase()
@@ -413,4 +468,3 @@ function Metric({
     </button>
   );
 }
-

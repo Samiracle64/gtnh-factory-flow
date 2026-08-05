@@ -693,6 +693,21 @@ describe("factory resource links", () => {
     expect(useFactoryStore.getState().project.edges).toHaveLength(1);
   });
 
+  it("coalesces rapid visual movement into one undo snapshot", () => {
+    const originalPosition = useFactoryStore
+      .getState()
+      .project.nodes.find((node) => node.id === "item-source")?.position;
+
+    useFactoryStore.getState().setNodePosition("item-source", { x: 120, y: 80 });
+    useFactoryStore.getState().setNodePosition("item-source", { x: 180, y: 140 });
+
+    expect(useFactoryStore.getState().undoHistory).toHaveLength(1);
+    useFactoryStore.getState().undo();
+    expect(
+      useFactoryStore.getState().project.nodes.find((node) => node.id === "item-source")?.position,
+    ).toEqual(originalPosition);
+  });
+
   it("clears redo history after a new edit", () => {
     useFactoryStore.getState().updateNode("item-source", { machineCount: 4 });
     useFactoryStore.getState().undo();

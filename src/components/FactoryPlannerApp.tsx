@@ -1,21 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_DATASET_MANIFEST_URL,
   fetchDatasetManifest,
   pickDefaultDatasetVersion,
 } from "@/lib/datasets";
+import { getRecipeDatasetRecipe, initRecipeDatasetVersion } from "@/lib/datasets/browser-loader";
+import { createEmptyProject } from "@/examples";
 import {
-  getRecipeDatasetRecipe,
-  initRecipeDatasetVersion,
-} from "@/lib/datasets/browser-loader";
-import { parseFactoryProjectJson } from "@/lib/import-export";
-import { LOCAL_STORAGE_KEY, loadResourceHistory, useFactoryStore } from "@/store/factory-store";
+  deleteProject,
+  listProjects,
+  loadProject,
+  loadProjectLibrary,
+  saveProject,
+  setActiveProjectId,
+  type ProjectSummary,
+} from "@/lib/projects";
+import { loadResourceHistory, useFactoryStore } from "@/store/factory-store";
 import { FactoryFlow } from "./flow/FactoryFlow";
 import { InspectorPanel } from "./InspectorPanel";
 import { RecipeBrowser } from "./RecipeBrowser";
 import { TopBar } from "./TopBar";
+import { PlannerMobileNav, type PlannerPanel } from "./PlannerMobileNav";
 
 export function FactoryPlannerApp() {
   const project = useFactoryStore((state) => state.project);
@@ -29,6 +36,13 @@ export function FactoryPlannerApp() {
   const hydratedRef = useRef(false);
   const skipInitialSaveRef = useRef(true);
   const saveTimeoutRef = useRef<number | undefined>(undefined);
+  const [projectSummaries, setProjectSummaries] = useState<ProjectSummary[]>([]);
+  const [isProjectLibraryReady, setProjectLibraryReady] = useState(false);
+  const [activePanel, setActivePanel] = useState<PlannerPanel>("canvas");
+
+  const refreshProjectSummaries = useCallback(async () => {
+    setProjectSummaries(await listProjects());
+  }, []);
 
   const loadDatasetVersion = useCallback(
     async (versionId: string) => {
@@ -72,22 +86,33 @@ export function FactoryPlannerApp() {
   useEffect(() => {
     const cancelHydration = scheduleIdleWork(() => {
       hydrateResourceHistory(loadResourceHistory());
-
-      const storedProject = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (storedProject) {
+      void (async () => {
         try {
-          markHydratedProject(parseFactoryProjectJson(storedProject));
+          const library = await loadProjectLibrary();
+          const nextProject =
+            library.activeProject ??
+            createEmptyProject({ name: library.projects.length ? "New factory" : "GTNH Planner" });
+          hydratedRef.current = true;
+          skipInitialSaveRef.current = Boolean(library.activeProject);
+          markHydratedProject(nextProject);
+          if (!library.activeProject) {
+            await saveProject(nextProject);
+            await setActiveProjectId(nextProject.id);
+          }
+          await refreshProjectSummaries();
         } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "Stored plan could not be loaded.";
-          console.error(message);
+          console.error(
+            error instanceof Error ? error.message : "Project library could not be loaded.",
+          );
+          hydratedRef.current = true;
+        } finally {
+          setProjectLibraryReady(true);
         }
-      }
-      hydratedRef.current = true;
+      })();
     }, 800);
 
     return cancelHydration;
-  }, [hydrateResourceHistory, markHydratedProject]);
+  }, [hydrateResourceHistory, markHydratedProject, refreshProjectSummaries]);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,13 +165,14 @@ export function FactoryPlannerApp() {
 
     saveTimeoutRef.current = window.setTimeout(() => {
       scheduleIdleWork(() => {
-        try {
-          localStorage.setItem(LOCAL_STORAGE_KEY, `${JSON.stringify(project)}\n`);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "Plan could not be saved locally.";
-          console.error(message);
-        }
+        void saveProject(project)
+          .then(() => setActiveProjectId(project.id))
+          .then(refreshProjectSummaries)
+          .catch((error) => {
+            console.error(
+              error instanceof Error ? error.message : "Plan could not be saved locally.",
+            );
+          });
       }, 1200);
     }, 350);
 
@@ -155,16 +181,98 @@ export function FactoryPlannerApp() {
         window.clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [project]);
+  }, [project, refreshProjectSummaries]);
+
+  const activateProject = useCallback(
+    async (nextProjectId: string) => {
+      if (nextProjectId === project.id) {
+        return;
+      }
+      await saveProject(project);
+      const nextProject = await loadProject(nextProjectId);
+      if (!nextProject) {
+        return;
+      }
+      markHydratedProject(nextProject);
+      await setActiveProjectId(nextProject.id);
+      await refreshProjectSummaries();
+      if (nextProject.datasetVersionId) {
+        await loadDatasetVersion(nextProject.datasetVersionId);
+      }
+    },
+    [loadDatasetVersion, markHydratedProject, project, refreshProjectSummaries],
+  );
+
+  const createProject = useCallback(async () => {
+    await saveProject(project);
+    const nextProject = {
+      ...createEmptyProject(),
+      datasetVersionId: useFactoryStore.getState().selectedDatasetVersionId,
+    };
+    markHydratedProject(nextProject);
+    await saveProject(nextProject);
+    await setActiveProjectId(nextProject.id);
+    await refreshProjectSummaries();
+  }, [markHydratedProject, project, refreshProjectSummaries]);
+
+  const duplicateProject = useCallback(async () => {
+    const scaffold = createEmptyProject({ name: `${project.name} copy` });
+    const duplicate = {
+      ...project,
+      id: scaffold.id,
+      name: scaffold.name,
+      metadata: scaffold.metadata,
+    };
+    markHydratedProject(duplicate);
+    await saveProject(duplicate);
+    await setActiveProjectId(duplicate.id);
+    await refreshProjectSummaries();
+  }, [markHydratedProject, project, refreshProjectSummaries]);
+
+  const removeActiveProject = useCallback(async () => {
+    if (projectSummaries.length <= 1) {
+      return;
+    }
+    if (!window.confirm(`Delete project "${project.name}"?`)) {
+      return;
+    }
+    const nextProjectId = projectSummaries.find((entry) => entry.id !== project.id)?.id;
+    await deleteProject(project.id);
+    if (nextProjectId) {
+      const nextProject = await loadProject(nextProjectId);
+      if (nextProject) {
+        markHydratedProject(nextProject);
+        await setActiveProjectId(nextProject.id);
+      }
+    }
+    await refreshProjectSummaries();
+  }, [markHydratedProject, project.id, project.name, projectSummaries, refreshProjectSummaries]);
 
   return (
-    <div className="flex h-screen min-h-[720px] flex-col bg-neutral-100 text-neutral-950">
-      <TopBar onLoadDatasetVersion={loadDatasetVersion} />
-      <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)_360px]">
-        <RecipeBrowser />
-        <FactoryFlow />
-        <InspectorPanel />
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-neutral-100 text-neutral-950">
+      <TopBar
+        onLoadDatasetVersion={loadDatasetVersion}
+        projects={projectSummaries}
+        isProjectLibraryReady={isProjectLibraryReady}
+        onCreateProject={() => void createProject()}
+        onDuplicateProject={() => void duplicateProject()}
+        onSelectProject={(projectId) => void activateProject(projectId)}
+        onDeleteProject={() => void removeActiveProject()}
+      />
+      <main className="relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)_360px]">
+        <div className={`${activePanel === "recipes" ? "flex" : "hidden"} min-h-0 min-w-0 lg:flex`}>
+          <RecipeBrowser />
+        </div>
+        <div className={`${activePanel === "canvas" ? "flex" : "hidden"} min-h-0 min-w-0 lg:flex`}>
+          <FactoryFlow />
+        </div>
+        <div
+          className={`${activePanel === "inspector" ? "flex" : "hidden"} min-h-0 min-w-0 lg:flex`}
+        >
+          <InspectorPanel />
+        </div>
       </main>
+      <PlannerMobileNav activePanel={activePanel} onChange={setActivePanel} />
     </div>
   );
 }

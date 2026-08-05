@@ -518,7 +518,11 @@ function RecipeNodeComponent({ data, selected }: NodeProps<RecipeFlowNode>) {
             <Stat label="Usage" value={`${formatRate(utilizationPercent, 1)}%`} />
             <Stat
               label={isCropProductionNode ? "Power" : "EU/t"}
-              value={isCropProductionNode ? "Passive" : formatRate(result?.euT ?? 0, 0)}
+              value={
+                isCropProductionNode
+                  ? "Passive"
+                  : `${formatRate(result?.euT ?? 0, 0)} · ${formatRate(result?.amperage ?? 0, 0)} A`
+              }
             />
           </div>
         ) : null}

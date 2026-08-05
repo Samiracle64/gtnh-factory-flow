@@ -1,13 +1,18 @@
 import { DEFAULT_FUEL_PROFILE_ID, gtnhFuelProfiles } from "@/lib/model/fuels";
 import { PROJECT_SCHEMA_VERSION, type FactoryProject } from "@/lib/model/types";
 
-export function createEmptyProject(): FactoryProject {
+export function createEmptyProject(options: { id?: string; name?: string } = {}): FactoryProject {
   const now = new Date().toISOString();
 
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
-    id: "manual-project",
-    name: "GTNH Planner",
+    id: options.id ?? createProjectId(),
+    name: options.name ?? "New factory",
+    calculationSettings: {
+      probabilityMode: "expected",
+      probabilityConfidence: 0.95,
+      probabilityWindowSeconds: 60,
+    },
     recipes: [],
     nodes: [],
     storages: [],
@@ -20,4 +25,9 @@ export function createEmptyProject(): FactoryProject {
       updatedAt: now,
     },
   };
+}
+
+function createProjectId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return `project-${uuid ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 }

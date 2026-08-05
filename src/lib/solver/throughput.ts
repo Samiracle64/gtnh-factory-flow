@@ -1,5 +1,4 @@
 import {
-  getChanceMultiplier,
   getFilledCellFluidEquivalent,
   isRecipeInputConsumed,
   makeResourceKey,
@@ -26,6 +25,12 @@ import type {
 import { TICKS_PER_SECOND } from "../model/types";
 import { resolveNodeRecipe } from "./resolved-recipe";
 import { runtimeCalculationWarning } from "./runtime-calculation";
+import {
+  getProbabilityAdjustedOutputRate,
+  hasProbabilisticOutputs,
+  normalizeCalculationSettings,
+} from "./probability";
+import { calculateMachineAmperage } from "./power";
 
 const EPSILON = 0.000001;
 
@@ -118,12 +123,22 @@ export function calculateThroughput(
     }
 
     for (const output of resolvedRecipe.outputs) {
-      const amountPerSecond = output.amount * getChanceMultiplier(output) * operationRatePerSecond;
+      const amountPerSecond = getProbabilityAdjustedOutputRate(
+        output,
+        operationRatePerSecond,
+        project.calculationSettings,
+      );
       addFlow(outputs, output, amountPerSecond);
     }
 
     const euT =
       overclockedRecipe.eut * node.machineCount * node.parallel * machineParallelMultiplier;
+    const amperage = calculateMachineAmperage(
+      overclockedRecipe.eut,
+      overclockedRecipe.tier,
+      node.machineCount,
+      node.parallel * machineParallelMultiplier,
+    );
     totalEuT += euT;
 
     nodes[node.id] = {
@@ -135,14 +150,22 @@ export function calculateThroughput(
       inputs,
       outputs,
       euT,
+      amperage,
+      voltageTier: overclockedRecipe.tier,
       requiredRatePerSecond: 0,
       maxRatePerSecond: 0,
       utilization: 0,
       theoreticalMachinesRequired: 0,
       status: "underutilized",
-      warnings: [runtimeCalculationWarning(effectiveRecipe, node)].filter(
-        (warning): warning is string => Boolean(warning),
-      ),
+      warnings: [
+        runtimeCalculationWarning(effectiveRecipe, node),
+        project.calculationSettings?.probabilityMode === "reliable" &&
+        hasProbabilisticOutputs(resolvedRecipe.outputs)
+          ? `Probabilistic outputs use a ${Math.round(
+              normalizeCalculationSettings(project.calculationSettings).probabilityConfidence * 100,
+            )}% reliable lower bound over ${normalizeCalculationSettings(project.calculationSettings).probabilityWindowSeconds}s.`
+          : undefined,
+      ].filter((warning): warning is string => Boolean(warning)),
     };
   }
 

@@ -364,7 +364,7 @@ jobs:
             -v "$release_dir:/workspace" \
             -w /workspace \
             gtnh-factory-flow-site:ci \
-            bash -lc 'npm install && npm run build'
+            bash -lc 'npm ci && npm run lint && npm run typecheck && npm run test && npm run build'
 
           mkdir -p "$release_dir/public/datasets"
           rm -rf "$release_dir/public/datasets/gtnh"

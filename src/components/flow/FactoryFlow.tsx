@@ -959,7 +959,7 @@ export function FactoryFlow() {
     <div
       ref={boardRef}
       className={[
-        "factory-flow-board relative h-full min-h-[520px] overflow-hidden border-x border-neutral-200 bg-neutral-100",
+        "factory-flow-board relative h-full min-h-[320px] w-full flex-1 overflow-hidden border-x border-neutral-200 bg-neutral-100 lg:min-h-[520px]",
         isNodeDragging ? "factory-flow-board--dragging" : "",
       ].join(" ")}
     >

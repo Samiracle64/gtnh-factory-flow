@@ -26,6 +26,8 @@ const resourceVisuals = new Map();
 const recipeNeiLayouts = new Map();
 const serverResourceKeys = new Set();
 const serverRecipesBySignature = new Map();
+const serverRecipesBySemanticKey = new Map();
+const ambiguousServerSemanticKeys = new Set();
 const serverRecipeMaps = new Set();
 const serverRecipeMapIcons = new Set();
 const clientOnlyResources = [];
@@ -44,7 +46,10 @@ await visitDatasetContainers(serverDatasetPath, {
       if (key) serverResourceKeys.add(key);
     },
     recipes(recipe) {
-      if (recipe?.id) serverRecipesBySignature.set(recipeSignature(recipe), recipe.id);
+      if (recipe?.id) {
+        serverRecipesBySignature.set(recipeSignature(recipe), recipe.id);
+        indexUniqueSemanticRecipe(recipe, recipe.id);
+      }
     },
     recipeMaps(recipeMap) {
       if (typeof recipeMap === "string") serverRecipeMaps.add(recipeMap);
@@ -69,7 +74,11 @@ await visitDatasetContainers(clientDatasetPath, {
     recipes(recipe) {
       clientRecipeCount += 1;
       if (!recipe?.id) return;
-      const serverRecipeId = serverRecipesBySignature.get(recipeSignature(recipe));
+      const semanticKey = semanticRecipeKey(recipe);
+      const serverRecipeId =
+        (semanticKey && !ambiguousServerSemanticKeys.has(semanticKey)
+          ? serverRecipesBySemanticKey.get(semanticKey)
+          : undefined) ?? serverRecipesBySignature.get(recipeSignature(recipe));
       if (!serverRecipeId) {
         if (clientOnlyRecipeCategories.has(recipe.category)) {
           clientOnlyRecipes.push(recipe);
@@ -123,6 +132,8 @@ const stats = {
   clientRecipeCount,
   resourceVisualCount: resourceVisuals.size,
   clientNeiLayoutCount: recipeNeiLayouts.size,
+  semanticRecipeIdentityCount: serverRecipesBySemanticKey.size,
+  ambiguousSemanticRecipeIdentityCount: ambiguousServerSemanticKeys.size,
   clientOnlyResourceCount: clientOnlyResources.length,
   clientOnlyRecipeCount: clientOnlyRecipes.length,
   clientOnlyRecipeMapCount: clientOnlyRecipeMaps.length,
@@ -389,6 +400,35 @@ function recipeSignature(recipe) {
       entry.chance,
     ]),
   });
+}
+
+function semanticRecipeKey(recipe) {
+  const source = recipe?.source;
+  const sourceId = source?.sourceIdentifier ?? source?.rawRecipeId;
+  if (typeof sourceId !== "string" || sourceId.length === 0) {
+    return undefined;
+  }
+  return JSON.stringify({
+    exporter: source?.exporter,
+    recipeMap: source?.recipeMap,
+    sourceId,
+    machineType: recipe?.machineType,
+    category: recipe?.category,
+  });
+}
+
+function indexUniqueSemanticRecipe(recipe, recipeId) {
+  const key = semanticRecipeKey(recipe);
+  if (!key || ambiguousServerSemanticKeys.has(key)) {
+    return;
+  }
+  const existing = serverRecipesBySemanticKey.get(key);
+  if (existing && existing !== recipeId) {
+    serverRecipesBySemanticKey.delete(key);
+    ambiguousServerSemanticKeys.add(key);
+    return;
+  }
+  serverRecipesBySemanticKey.set(key, recipeId);
 }
 
 function presentationForResource(resource) {
